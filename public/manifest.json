@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "Computer Fundamentals Academy",
+  "short_name": "CS Academy",
+  "description": "Bilingual Punjabi & English Computer Science & Mathematics Academy optimized for iPhone 15 Pro full-screen.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#020617",
+  "theme_color": "#020617",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Computer Fundamentals Academy",
+  "description": "Full-stack bilingual (Punjabi Gurmukhi & English) Computer Science & Mathematics Academy with interactive hardware labs, algorithm visualizers, task planner, and AI tutor.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
