@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import 'katex/dist/katex.min.css';
 import { onAuthStateChanged, signInWithPopup, signOut, User as FirebaseUser } from 'firebase/auth';
 import { auth, googleAuthProvider } from './lib/firebase.ts';
 import { ComputerLaboratory, LabId } from './components/ComputerLaboratory.tsx';
@@ -9,6 +10,7 @@ import {
   renderLatexToHtml,
   getLessonFormulas,
 } from './components/MathMessageRenderer.tsx';
+import { LessonTemplateEditor } from './components/LessonTemplateEditor.tsx';
 import {
   BookOpen,
   Cpu,
@@ -808,6 +810,34 @@ export default function App() {
       await fetchCurriculum();
     } catch (err: any) {
       setAdminStatusMsg(`Error: ${err.message || 'Failed to save syllabus lesson'}`);
+    }
+  };
+
+  const handleSave28SectionLesson = async (compiledPayload: any) => {
+    setAdminStatusMsg('');
+    if (!isAdmin) {
+      setAdminStatusMsg(
+        'Forbidden: Verified Administrator privileges are required to publish or modify syllabus lessons.'
+      );
+      return;
+    }
+
+    try {
+      const res = await authenticatedFetch('/api/admin/lessons', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(compiledPayload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to save 28-section syllabus lesson');
+      }
+      setAdminStatusMsg(
+        `28-Section Lesson "${compiledPayload.titleEn}" validated, saved to PostgreSQL, and published!`
+      );
+      await fetchCurriculum();
+    } catch (err: any) {
+      setAdminStatusMsg(`Error: ${err.message || 'Failed to save 28-section syllabus lesson'}`);
     }
   };
 
@@ -2278,18 +2308,18 @@ export default function App() {
             </div>
           )}
 
-          {/* 10. SYLLABUS COVERAGE & PROTECTED ADMIN EDITOR */}
+          {/* 10. SYLLABUS COVERAGE & PROTECTED 28-SECTION LESSON TEMPLATE EDITOR */}
           {activeSection === 'admin' && (
-            <div className={`p-5 sm:p-6 rounded-xl border space-y-5 ${surfaceCard}`}>
+            <div className={`p-5 sm:p-6 rounded-xl border space-y-6 ${surfaceCard}`}>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="text-lg sm:text-xl font-bold">
-                    Syllabus Coverage & Studio · ਪਾਠਕ੍ਰਮ ਨਿਰੀਖਣ ਅਤੇ ਸੰਪਾਦਕ
+                    28-Section Lesson Template Editor & Syllabus Studio · ਪਾਠਕ੍ਰਮ ਸੰਪਾਦਕ
                   </h2>
                   <p className="text-xs text-slate-400">
                     {isAdmin
-                      ? 'Administrator Access Verified — Add or customize bilingual lessons in Cloud SQL'
-                      : 'Read-Only Syllabus Coverage Inspector — Administrator role required to modify lessons'}
+                      ? 'Administrator Access Verified — Author or update standardized 28-section bilingual lessons in Cloud SQL'
+                      : 'Read-Only 28-Section Structure Inspector — Verified Administrator role required to publish modifications'}
                   </p>
                 </div>
                 {syllabusCoverage && (
@@ -2305,163 +2335,51 @@ export default function App() {
                 </div>
               )}
 
-              {!isAdmin ? (
-                <div className="space-y-4">
-                  <div className="p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-xs space-y-1">
-                    <div className="font-bold text-amber-400 flex items-center gap-1.5">
-                      <Lock className="w-4 h-4" />
-                      <span>Administrator Role Required for Syllabus Editing</span>
-                    </div>
-                    <p className="text-slate-300">
-                      Syllabus editing is restricted to verified administrator accounts on both the frontend and backend (`requireAdmin`). Below is the live 9-Level Syllabus Coverage Audit against `COMPLETE_SYLLABUS_BLUEPRINT`.
-                    </p>
+              {!isAdmin && (
+                <div className="p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-xs space-y-1">
+                  <div className="font-bold text-amber-400 flex items-center gap-1.5">
+                    <Lock className="w-4 h-4" />
+                    <span>Administrator Role Required for Publishing Syllabus Changes</span>
                   </div>
-
-                  {syllabusCoverage?.levels && (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      {syllabusCoverage.levels.map((lvl: any) => (
-                        <div key={lvl.level} className={`p-4 rounded-xl border space-y-1.5 ${subtlePanel}`}>
-                          <div className="text-xs font-bold text-sky-400">{lvl.titleEn}</div>
-                          <div className="text-xs text-amber-400 font-medium">{lvl.titlePa}</div>
-                          <div className="text-xs font-mono text-emerald-400">
-                            Status: {lvl.status.toUpperCase()} ({lvl.coveredTopicsCount}/{lvl.totalTopics} topics · {lvl.authoredLessonCount} lessons)
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <p className="text-slate-300">
+                    Syllabus publishing is restricted to verified administrator accounts on both the frontend and backend (`requireAdmin`). You can inspect the 28-section structure and live KaTeX preview of any lesson below.
+                  </p>
                 </div>
-              ) : (
-                <form onSubmit={handleSaveSyllabusLesson} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold mb-1">Course / Level</label>
-                    <select
-                      value={editCourseId}
-                      onChange={(e) => setEditCourseId(Number(e.target.value))}
-                      className={`w-full px-3 py-2.5 rounded-lg border text-sm ${subtlePanel}`}
-                    >
-                      {courses.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.titleEn}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+              )}
 
-                  <div>
-                    <label className="block text-xs font-bold mb-1">Linked Simulation Lab</label>
-                    <select
-                      value={editLabId}
-                      onChange={(e) => setEditLabId(e.target.value)}
-                      className={`w-full px-3 py-2.5 rounded-lg border text-sm ${subtlePanel}`}
-                    >
-                      <option value="hardware-explorer">Lab A: Computer Hardware Explorer</option>
-                      <option value="cpu-cycle">Lab B: CPU Instruction Cycle</option>
-                      <option value="ram-storage">Lab C: RAM vs Storage Hierarchy</option>
-                      <option value="binary-converter">Lab D: Binary Converter</option>
-                      <option value="logic-gates">Lab E: Logic Gate Laboratory</option>
-                      <option value="network-sim">Lab F: Network Packet Simulator</option>
-                      <option value="algorithm-math-lab">Lab G: Algorithms & CS Math</option>
-                    </select>
-                  </div>
+              <LessonTemplateEditor
+                courses={courses}
+                lessons={lessons}
+                initialLesson={
+                  editLessonId
+                    ? lessons.find((l) => l.id === editLessonId) || currentLesson
+                    : currentLesson
+                }
+                isAdmin={isAdmin}
+                darkMode={darkMode}
+                subtlePanel={subtlePanel}
+                surfaceCard={surfaceCard}
+                onSaveLesson={handleSave28SectionLesson}
+              />
 
-                  <div>
-                    <label className="block text-xs font-bold mb-1">Lesson Title (English)</label>
-                    <input
-                      type="text"
-                      required
-                      value={editTitleEn}
-                      onChange={(e) => setEditTitleEn(e.target.value)}
-                      className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
-                    />
+              {syllabusCoverage?.levels && (
+                <div className="pt-4 border-t border-slate-500/20 space-y-3">
+                  <h3 className="text-sm font-bold">
+                    Live Syllabus Blueprint Coverage Audit ({syllabusCoverage.completeTopics}/
+                    {syllabusCoverage.totalBlueprintTopics} Topics)
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {syllabusCoverage.levels.map((lvl: any) => (
+                      <div key={lvl.level} className={`p-4 rounded-xl border space-y-1.5 ${subtlePanel}`}>
+                        <div className="text-xs font-bold text-sky-400">{lvl.titleEn}</div>
+                        <div className="text-xs text-amber-400 font-medium">{lvl.titlePa}</div>
+                        <div className="text-xs font-mono text-emerald-400">
+                          Status: {lvl.status.toUpperCase()} ({lvl.coveredTopicsCount}/{lvl.totalTopics} topics · {lvl.authoredLessonCount} lessons)
+                        </div>
+                      </div>
+                    ))}
                   </div>
-
-                  <div>
-                    <label className="block text-xs font-bold mb-1">Lesson Title (Punjabi)</label>
-                    <input
-                      type="text"
-                      required
-                      value={editTitlePa}
-                      onChange={(e) => setEditTitlePa(e.target.value)}
-                      className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold mb-1">Child Analogy (Punjabi)</label>
-                    <textarea
-                      rows={3}
-                      required
-                      value={editAnalogyPa}
-                      onChange={(e) => setEditAnalogyPa(e.target.value)}
-                      className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold mb-1">Child Analogy (English)</label>
-                    <textarea
-                      rows={3}
-                      required
-                      value={editAnalogyEn}
-                      onChange={(e) => setEditAnalogyEn(e.target.value)}
-                      className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold mb-1">Technical Explanation (Punjabi)</label>
-                    <textarea
-                      rows={3}
-                      required
-                      value={editTechPa}
-                      onChange={(e) => setEditTechPa(e.target.value)}
-                      className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold mb-1">Technical Explanation (English)</label>
-                    <textarea
-                      rows={3}
-                      required
-                      value={editTechEn}
-                      onChange={(e) => setEditTechEn(e.target.value)}
-                      className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold mb-1">Practical Example (Punjabi)</label>
-                    <textarea
-                      rows={2}
-                      required
-                      value={editExamplePa}
-                      onChange={(e) => setEditExamplePa(e.target.value)}
-                      className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold mb-1">Practical Example (English)</label>
-                    <textarea
-                      rows={2}
-                      required
-                      value={editExampleEn}
-                      onChange={(e) => setEditExampleEn(e.target.value)}
-                      className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
-                    />
-                  </div>
-
-                  <div className="md:col-span-2">
-                    <button
-                      type="submit"
-                      className="w-full sm:w-auto px-6 py-3 min-h-[44px] rounded-xl bg-sky-600 text-white text-xs font-bold"
-                    >
-                      {editLessonId ? 'Save Lesson Updates' : 'Publish New Lesson'}
-                    </button>
-                  </div>
-                </form>
+                </div>
               )}
             </div>
           )}

@@ -71,6 +71,12 @@ import {
   tokenizeMathAndText,
   renderLatexToHtml,
 } from '../components/MathMessageRenderer.tsx';
+import {
+  hydrateLessonTo28Sections,
+  evaluate28SectionCompliance,
+  compile28SectionPayload,
+  createBlank28SectionState,
+} from '../components/LessonTemplateEditor.tsx';
 
 describe('Computer Fundamentals Academy — Security, Database, Assessment & Curriculum Audit Suite', () => {
   let sampleLessonId = 1;
@@ -424,6 +430,39 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
       const renderedBlock = renderLatexToHtml('N_{10} = \\sum_{i=0}^{7} b_i \\cdot 2^i', true);
       expect(renderedBlock).toContain('katex-display');
       expect(renderedBlock).toContain('katex-mathml');
+    });
+
+    it('enforces the standardized 28-section lesson structure for new and existing lessons', () => {
+      const blank = createBlank28SectionState(1);
+      const blankAudit = evaluate28SectionCompliance(blank);
+      expect(blankAudit.length).toBe(28);
+      expect(blankAudit.filter((s) => s.valid).length).toBeLessThan(28);
+
+      const hydrated = hydrateLessonTo28Sections(
+        {
+          id: 1,
+          courseId: 1,
+          slug: 'binary-logic-foundations',
+          titleEn: 'Binary Logic & Gates Foundations',
+          titlePa: 'ਬਾਈਨਰੀ ਲੌਜਿਕ ਅਤੇ ਗੇਟਸ ਦੇ ਮੂਲ ਸਿਧਾਂਤ',
+          interactiveLabId: 'logic-gates',
+          childAnalogyEn: 'Think of two switches in series controlling a room lamp.',
+          childAnalogyPa: 'ਇੱਕ ਬੱਲਬ ਨੂੰ ਚਲਾਉਣ ਵਾਲੇ ਦੋ ਲੜੀਵਾਰ ਸਵਿੱਚਾਂ ਬਾਰੇ ਸੋਚੋ।',
+          technicalExplanationEn: 'Digital logic gates operate on binary voltage levels 0 and 1.',
+          technicalExplanationPa: 'ਡਿਜੀਟਲ ਲੌਜਿਕ ਗੇਟ 0 ਅਤੇ 1 ਵੋਲਟੇਜ ਪੱਧਰਾਂ ਤੇ ਕੰਮ ਕਰਦੇ ਹਨ।',
+          practicalExampleEn: 'Used in every CPU Arithmetic Logic Unit (ALU) adder circuit.',
+          practicalExamplePa: 'ਹਰ CPU ਦੇ ALU ਐਡਰ ਸਰਕਟ ਵਿੱਚ ਵਰਤਿਆ ਜਾਂਦਾ ਹੈ।',
+        },
+        1
+      );
+      const hydratedAudit = evaluate28SectionCompliance(hydrated);
+      expect(hydratedAudit.length).toBe(28);
+      expect(hydratedAudit.every((s) => s.valid)).toBe(true);
+
+      const compiled = compile28SectionPayload(hydrated);
+      expect(compiled.technicalExplanationEn).toContain('14. Mathematical Derivations (LaTeX)');
+      expect(compiled.technicalExplanationEn).toContain('16. Worked Numerical Examples');
+      expect(compiled.technicalExplanationEn).toContain('25. Formative Self-Check Assessment');
     });
   });
 });

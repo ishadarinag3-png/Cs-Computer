@@ -357,7 +357,7 @@ app.post('/api/users/me/notes', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-// 9. Protected Admin Syllabus Management (requireAuth + requireAdmin)
+// 9. Protected Admin Syllabus Management (requireAuth + requireAdmin) — Enforces 28-Section Lesson Structure
 const UpsertLessonSchema = z
   .object({
     id: PositiveIntSchema.optional(),
@@ -370,15 +370,42 @@ const UpsertLessonSchema = z
       .regex(/^[a-z0-9-]+$/, 'Slug must contain only lowercase letters, numbers, and hyphens'),
     titleEn: z.string().trim().min(3).max(200),
     titlePa: z.string().trim().min(3).max(200),
-    childAnalogyEn: z.string().trim().min(10).max(4000),
-    childAnalogyPa: z.string().trim().min(10).max(4000),
-    technicalExplanationEn: z.string().trim().min(10).max(8000),
-    technicalExplanationPa: z.string().trim().min(10).max(8000),
-    practicalExampleEn: z.string().trim().min(5).max(4000),
-    practicalExamplePa: z.string().trim().min(5).max(4000),
-    codeDemo: z.string().max(8000).default(''),
+    childAnalogyEn: z.string().trim().min(10).max(6000),
+    childAnalogyPa: z.string().trim().min(10).max(6000),
+    technicalExplanationEn: z.string().trim().min(10).max(20000),
+    technicalExplanationPa: z.string().trim().min(10).max(20000),
+    practicalExampleEn: z.string().trim().min(5).max(6000),
+    practicalExamplePa: z.string().trim().min(5).max(6000),
+    codeDemo: z.string().max(10000).default(''),
     interactiveLabId: z.string().trim().min(2).max(80).default('hardware-explorer'),
-    objectivesJson: z.array(z.string().trim().min(2).max(300)).max(20).default([]),
+    objectivesJson: z.array(z.string().trim().min(2).max(400)).max(25).default([]),
+    prerequisitesJson: z.array(z.string().trim().min(2).max(400)).max(20).default([]),
+    misconceptionsJson: z
+      .array(
+        z.object({
+          myth: z.string().trim().min(2).max(500),
+          truthEn: z.string().trim().min(2).max(600),
+          truthPa: z.string().trim().min(2).max(600),
+        })
+      )
+      .max(20)
+      .default([]),
+    terminologyJson: z
+      .array(
+        z.object({
+          term: z.string().trim().min(1).max(200),
+          punjabi: z.string().trim().min(1).max(200),
+          meaningEn: z.string().trim().min(2).max(600),
+          meaningPa: z.string().trim().min(2).max(600),
+        })
+      )
+      .max(30)
+      .default([]),
+    exercisePromptEn: z.string().trim().max(4000).default(''),
+    exercisePromptPa: z.string().trim().max(4000).default(''),
+    summaryEn: z.string().trim().max(4000).default(''),
+    summaryPa: z.string().trim().max(4000).default(''),
+    furtherReadingJson: z.array(z.string().trim().min(2).max(400)).max(20).default([]),
   })
   .strict();
 

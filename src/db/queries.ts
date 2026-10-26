@@ -1008,6 +1008,14 @@ export async function upsertLessonInSyllabus(payload: {
   codeDemo: string;
   interactiveLabId: string;
   objectivesJson: string[];
+  prerequisitesJson?: string[];
+  misconceptionsJson?: Array<{ myth: string; truthEn: string; truthPa: string }>;
+  terminologyJson?: Array<{ term: string; punjabi: string; meaningEn: string; meaningPa: string }>;
+  exercisePromptEn?: string;
+  exercisePromptPa?: string;
+  summaryEn?: string;
+  summaryPa?: string;
+  furtherReadingJson?: string[];
 }) {
   try {
     const [targetCourse] = await db.select().from(courses).where(eq(courses.id, payload.courseId));
@@ -1037,11 +1045,23 @@ export async function upsertLessonInSyllabus(payload: {
       targetModuleId = courseModules[0].id;
     }
 
+    const extraColumns = {
+      ...(payload.prerequisitesJson ? { prerequisitesJson: payload.prerequisitesJson } : {}),
+      ...(payload.misconceptionsJson ? { misconceptionsJson: payload.misconceptionsJson } : {}),
+      ...(payload.terminologyJson ? { terminologyJson: payload.terminologyJson } : {}),
+      ...(payload.exercisePromptEn !== undefined ? { exercisePromptEn: payload.exercisePromptEn } : {}),
+      ...(payload.exercisePromptPa !== undefined ? { exercisePromptPa: payload.exercisePromptPa } : {}),
+      ...(payload.summaryEn ? { summaryEn: payload.summaryEn } : {}),
+      ...(payload.summaryPa ? { summaryPa: payload.summaryPa } : {}),
+      ...(payload.furtherReadingJson ? { furtherReadingJson: payload.furtherReadingJson } : {}),
+    };
+
     if (payload.id) {
       const [updated] = await db
         .update(lessons)
         .set({
           courseId: payload.courseId,
+          slug: payload.slug,
           titleEn: payload.titleEn,
           titlePa: payload.titlePa,
           childAnalogyEn: payload.childAnalogyEn,
@@ -1053,6 +1073,7 @@ export async function upsertLessonInSyllabus(payload: {
           codeDemo: payload.codeDemo,
           interactiveLabId: payload.interactiveLabId,
           objectivesJson: payload.objectivesJson,
+          ...extraColumns,
           updatedAt: new Date(),
         })
         .where(eq(lessons.id, payload.id))
@@ -1080,8 +1101,14 @@ export async function upsertLessonInSyllabus(payload: {
           codeDemo: payload.codeDemo,
           interactiveLabId: payload.interactiveLabId,
           objectivesJson: payload.objectivesJson,
-          summaryEn: payload.titleEn,
-          summaryPa: payload.titlePa,
+          prerequisitesJson: payload.prerequisitesJson || [],
+          misconceptionsJson: payload.misconceptionsJson || [],
+          terminologyJson: payload.terminologyJson || [],
+          exercisePromptEn: payload.exercisePromptEn || '',
+          exercisePromptPa: payload.exercisePromptPa || '',
+          summaryEn: payload.summaryEn || payload.titleEn,
+          summaryPa: payload.summaryPa || payload.titlePa,
+          furtherReadingJson: payload.furtherReadingJson || [],
           published: true,
         })
         .onConflictDoUpdate({
@@ -1099,6 +1126,7 @@ export async function upsertLessonInSyllabus(payload: {
             codeDemo: payload.codeDemo,
             interactiveLabId: payload.interactiveLabId,
             objectivesJson: payload.objectivesJson,
+            ...extraColumns,
             updatedAt: new Date(),
           },
         })
