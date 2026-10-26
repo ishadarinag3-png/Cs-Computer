@@ -440,22 +440,23 @@ app.post(
 
       const modeInstructions: Record<string, string> = {
         'child-friendly':
-          'Explain like the learner is a curious 10-year-old child! Use vivid everyday Punjabi household/village analogies (e.g., kitchen, post office, torch switches, sugarcane machine) alongside clear English technical terms.',
+          'Explain like the learner is a curious 10-year-old child! Use vivid everyday Punjabi household/village analogies (e.g., kitchen, post office, torch switches, sugarcane machine) alongside clear English technical terms. Use inline LaTeX ($...$) when showing simple numbers or powers.',
         'deep-technical':
-          'Provide a rigorous computer engineering explanation covering hardware registers, binary opcodes, memory latency, and algorithmic complexity, in both Punjabi (Gurmukhi) and English.',
+          'Provide a rigorous computer engineering explanation covering hardware registers, binary opcodes, memory latency, and algorithmic complexity, in both Punjabi (Gurmukhi) and English. Format equations, complexity bounds, and electrical formulas in LaTeX ($...$ or $$...$$).',
         'math-step':
-          'Break down the binary, hexadecimal, Boolean algebra, discrete math, or probability calculation step-by-step showing every intermediate number and formula.',
+          'Break down the binary, hexadecimal, Boolean algebra, electronics, discrete math, or probability calculation step-by-step showing every intermediate number and formula. CRITICAL: Write all mathematical formulas, positional expansions, truth-table identities, and step-by-step derivations using standard LaTeX delimiters: use $$...$$ for block step equations and $...$ for inline variables/expressions so KaTeX renders them clearly.',
         'quiz-me':
-          'Explain the concept briefly in Punjabi and English, then ask 2 thought-provoking practice questions to test the learner’s conceptual understanding.',
+          'Explain the concept briefly in Punjabi and English (using $...$ or $$...$$ for any math formulas), then ask 2 thought-provoking practice questions to test the learner’s conceptual understanding.',
       };
 
       const systemInstruction = `You are the Bilingual Professor at Computer Fundamentals Academy.
-Your mission is to teach Computer Science (Hardware, Binary, Assembly, OS, Networking, Algorithms) and Mathematics for Computer Science (Propositional Logic, Discrete Math, Sets, Graph Theory, Probability & Statistics).
+Your mission is to teach Computer Science (Hardware, Binary, Assembly, OS, Networking, Algorithms), Electronics, and Mathematics for Computer Science (Propositional Logic, Discrete Math, Sets, Graph Theory, Probability & Statistics).
 Rules:
 1. Always teach in warm, clear Punjabi written in Gurmukhi script AND English, keeping standard English technical terms (like CPU, ALU, Register, Binary, Logic Gate, Process, Thread, Big-O, Intersection, Median).
 2. Always include a "ਬੱਚਿਆਂ ਵਾਂਗ ਸੌਖੀ ਉਦਾਹਰਣ (Child-Friendly Analogy)" with a practical real-world illustration.
-3. Mode instruction: ${modeInstructions[mode] || modeInstructions['child-friendly']}
-4. Current Lesson Context: ${lessonTitle || 'General Computer Science & Math'} — ${lessonContext || ''}`;
+3. Format all mathematical formulas, equations, binary powers, Boolean expressions, and complexity notations using LaTeX ($...$ for inline math and $$...$$ for block equations).
+4. Mode instruction: ${modeInstructions[mode] || modeInstructions['child-friendly']}
+5. Current Lesson Context: ${lessonTitle || 'General Computer Science & Math'} — ${lessonContext || ''}`;
 
       let response;
       let activeModel = 'gemini-4-argon';

@@ -4,6 +4,12 @@ import { auth, googleAuthProvider } from './lib/firebase.ts';
 import { ComputerLaboratory, LabId } from './components/ComputerLaboratory.tsx';
 import { TaskManagerView, StudyTask } from './components/TaskManagerView.tsx';
 import {
+  MathMessageRenderer,
+  MATH_STEP_REFERENCE_FORMULAS,
+  renderLatexToHtml,
+  getLessonFormulas,
+} from './components/MathMessageRenderer.tsx';
+import {
   BookOpen,
   Cpu,
   CheckCircle2,
@@ -91,8 +97,14 @@ const INITIAL_TUTOR_WELCOME = [
   {
     role: 'assistant' as const,
     content:
-      'ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ! (Welcome to Computer Fundamentals Academy!) 🎓\nਮੈਂ ਤੁਹਾਡਾ Bilingual AI Tutor ਹਾਂ। ਤੁਸੀਂ ਮੈਨੂੰ ਕੰਪਿਊਟਰ ਹਾਰਡਵੇਅਰ (CPU, RAM), ਬਾਈਨਰੀ ਭਾਸ਼ਾ (0 ਅਤੇ 1), Assembly Language, Algorithms ਜਾਂ ਕੰਪਿਊਟਰ ਸਾਇੰਸ ਦੇ ਗਣਿਤ (Logic, Discrete Math, Statistics) ਬਾਰੇ ਕੋਈ ਵੀ ਸਵਾਲ ਪੁੱਛ ਸਕਦੇ ਹੋ — ਮੈਂ ਬੱਚਿਆਂ ਵਾਂਗ ਸੌਖੀਆਂ ਉਦਾਹਰਣਾਂ ਦੇ ਕੇ ਸਮਝਾਵਾਂਗਾ!',
+      'ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ! (Welcome to Computer Fundamentals Academy!) 🎓\nਮੈਂ ਤੁਹਾਡਾ Bilingual AI Tutor ਹਾਂ। ਤੁਸੀਂ ਮੈਨੂੰ ਕੰਪਿਊਟਰ ਹਾਰਡਵੇਅਰ (CPU, RAM), ਬਾਈਨਰੀ ਭਾਸ਼ਾ ($0$ ਅਤੇ $1$), Assembly Language, Algorithms ਜਾਂ ਕੰਪਿਊਟਰ ਸਾਇੰਸ ਦੇ ਗਣਿਤ (Logic, Discrete Math, Statistics) ਬਾਰੇ ਕੋਈ ਵੀ ਸਵਾਲ ਪੁੱਛ ਸਕਦੇ ਹੋ — ਮੈਂ ਬੱਚਿਆਂ ਵਾਂਗ ਸੌਖੀਆਂ ਉਦਾਹਰਣਾਂ ਦੇ ਕੇ ਸਮਝਾਵਾਂਗਾ!',
     mode: 'child-friendly',
+  },
+  {
+    role: 'assistant' as const,
+    content:
+      '**Step-by-Step Math & Binary Preview (KaTeX LaTeX Mode):**\nਡੈਸੀਮਲ $75_{10}$ ਨੂੰ 8-bit ਬਾਈਨਰੀ ਵਿੱਚ ਬਦਲਣ ਦਾ ਕਦਮ-ਦਰ-ਕਦਮ ਫਾਰਮੂਲਾ:\n$$N_{10} = \\sum_{i=0}^{7} b_i \\cdot 2^i = 64 + 8 + 2 + 1$$\n$$75_{10} = 0\\cdot 2^7 + 1\\cdot 2^6 + 0\\cdot 2^5 + 0\\cdot 2^4 + 1\\cdot 2^3 + 0\\cdot 2^2 + 1\\cdot 2^1 + 1\\cdot 2^0 = 01001011_2$$\nਅਤੇ **De Morgan’s Law** (ਬੂਲੀਅਨ ਅਲਜਬਰਾ):\n$$\\overline{A \\cdot B} = \\overline{A} + \\overline{B}, \\quad \\overline{A + B} = \\overline{A} \\cdot \\overline{B}$$',
+    mode: 'math-step',
   },
 ];
 
@@ -1528,14 +1540,22 @@ export default function App() {
                         🧒 ਬੱਚਿਆਂ ਵਾਂਗ ਸੌਖੀ ਉਦਾਹਰਣ (Explain Like I’m a Child — Practical Illustration)
                       </div>
                       {langMode !== 'english' && (
-                        <p className="text-sm sm:text-base leading-relaxed whitespace-pre-line font-medium select-text">
-                          {currentLesson.childAnalogyPa}
-                        </p>
+                        <div className="text-sm sm:text-base leading-relaxed font-medium select-text">
+                          <MathMessageRenderer
+                            content={currentLesson.childAnalogyPa}
+                            mode="child-friendly"
+                            darkMode={darkMode}
+                          />
+                        </div>
                       )}
                       {langMode !== 'punjabi' && (
-                        <p className="text-xs sm:text-sm leading-relaxed whitespace-pre-line opacity-90 select-text">
-                          {currentLesson.childAnalogyEn}
-                        </p>
+                        <div className="text-xs sm:text-sm leading-relaxed opacity-90 select-text">
+                          <MathMessageRenderer
+                            content={currentLesson.childAnalogyEn}
+                            mode="child-friendly"
+                            darkMode={darkMode}
+                          />
+                        </div>
                       )}
                     </div>
 
@@ -1546,18 +1566,83 @@ export default function App() {
                       </h3>
                       {langMode !== 'english' && (
                         <div
-                          className={`p-4 sm:p-5 rounded-xl border leading-relaxed text-sm sm:text-base whitespace-pre-line select-text ${subtlePanel}`}
+                          className={`p-4 sm:p-5 rounded-xl border leading-relaxed text-sm sm:text-base select-text ${subtlePanel}`}
                         >
-                          {currentLesson.technicalExplanationPa}
+                          <MathMessageRenderer
+                            content={currentLesson.technicalExplanationPa}
+                            mode="deep-technical"
+                            darkMode={darkMode}
+                          />
                         </div>
                       )}
                       {langMode !== 'punjabi' && (
                         <div
-                          className={`p-4 sm:p-5 rounded-xl border leading-relaxed text-xs sm:text-sm whitespace-pre-line select-text ${subtlePanel}`}
+                          className={`p-4 sm:p-5 rounded-xl border leading-relaxed text-xs sm:text-sm select-text ${subtlePanel}`}
                         >
-                          {currentLesson.technicalExplanationEn}
+                          <MathMessageRenderer
+                            content={currentLesson.technicalExplanationEn}
+                            mode="deep-technical"
+                            darkMode={darkMode}
+                          />
                         </div>
                       )}
+                    </div>
+
+                    {/* KaTeX Rendered Lesson Formulas */}
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <h4 className="text-sm sm:text-base font-bold text-sky-400">
+                          Key Mathematical & Engineering Formulas (KaTeX LaTeX) · ਗਣਿਤਿਕ ਫਾਰਮੂਲੇ
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTutorMode('math-step');
+                            setActiveSection('tutor');
+                          }}
+                          className="text-xs font-mono text-sky-400 hover:underline"
+                        >
+                          Open AI Tutor (math-step mode) →
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 gap-3">
+                        {getLessonFormulas(currentLesson.slug, currentLesson.courseId).map(
+                          (f, fIdx) => (
+                            <div
+                              key={fIdx}
+                              className={`p-4 rounded-xl border space-y-2 ${subtlePanel}`}
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                  <div className="text-xs font-bold text-sky-400">{f.labelEn}</div>
+                                  <div className="text-xs text-amber-400 font-medium">
+                                    {f.labelPa}
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setTutorMode('math-step');
+                                    setActiveSection('tutor');
+                                    handleSendTutorPrompt(
+                                      `In math-step mode, explain this formula step-by-step with a worked example in Punjabi and English: $$${f.latex}$$`
+                                    );
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-sky-600/20 border border-sky-500/40 text-sky-300 hover:bg-sky-600 hover:text-white text-[11px] font-semibold transition-colors"
+                                >
+                                  Solve Step-by-Step in AI Tutor
+                                </button>
+                              </div>
+                              <MathMessageRenderer
+                                content={`$$${f.latex}$$`}
+                                mode="math-step"
+                                darkMode={darkMode}
+                              />
+                              <p className="text-[11px] text-slate-400">{f.noteEn}</p>
+                            </div>
+                          )
+                        )}
+                      </div>
                     </div>
 
                     {/* Practical Real-World Example */}
@@ -1566,12 +1651,22 @@ export default function App() {
                         Practical Real-World Example · ਅਸਲ ਜ਼ਿੰਦਗੀ ਦੀ ਉਦਾਹਰਣ
                       </div>
                       {langMode !== 'english' && (
-                        <p className="text-sm leading-relaxed">{currentLesson.practicalExamplePa}</p>
+                        <div className="text-sm leading-relaxed">
+                          <MathMessageRenderer
+                            content={currentLesson.practicalExamplePa}
+                            mode="math-step"
+                            darkMode={darkMode}
+                          />
+                        </div>
                       )}
                       {langMode !== 'punjabi' && (
-                        <p className="text-xs leading-relaxed text-slate-400">
-                          {currentLesson.practicalExampleEn}
-                        </p>
+                        <div className="text-xs leading-relaxed text-slate-400">
+                          <MathMessageRenderer
+                            content={currentLesson.practicalExampleEn}
+                            mode="math-step"
+                            darkMode={darkMode}
+                          />
+                        </div>
                       )}
                     </div>
 
@@ -1886,7 +1981,7 @@ export default function App() {
               <div className={`lg:col-span-4 p-5 rounded-xl border space-y-4 ${surfaceCard}`}>
                 <div className="flex items-center gap-2 text-sky-500 text-xs font-mono">
                   <Sparkles className="w-4 h-4" />
-                  <span>High-Reasoning Bilingual Tutor</span>
+                  <span>High-Reasoning Bilingual Tutor · KaTeX Math Ready</span>
                 </div>
                 <h2 className="text-lg font-bold">
                   Punjabi + English CS & Math Tutor · ਏ.ਆਈ ਅਧਿਆਪਕ
@@ -1898,7 +1993,7 @@ export default function App() {
                     [
                       { id: 'child-friendly', label: '🧒 Explain Like I’m a Child (ਬੱਚਿਆਂ ਵਾਂਗ)' },
                       { id: 'deep-technical', label: '⚙️ Deep Hardware & Assembly' },
-                      { id: 'math-step', label: '🧮 Step-by-Step Math & Binary' },
+                      { id: 'math-step', label: '🧮 Step-by-Step Math & Binary (LaTeX)' },
                       { id: 'quiz-me', label: '🎯 Test My Understanding' },
                     ] as const
                   ).map((m) => (
@@ -1914,12 +2009,42 @@ export default function App() {
                   ))}
                 </div>
 
+                {tutorMode === 'math-step' && (
+                  <div className="space-y-2 pt-1 border-t border-slate-500/20">
+                    <div className="text-xs font-bold text-sky-400">
+                      KaTeX Step-by-Step Formula Library (Tap to Solve):
+                    </div>
+                    <div className="space-y-2 max-h-[240px] overflow-y-auto pr-1">
+                      {MATH_STEP_REFERENCE_FORMULAS.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => {
+                            setTutorMode('math-step');
+                            handleSendTutorPrompt(item.prompt);
+                          }}
+                          className={`w-full text-left p-2.5 rounded-lg border text-xs hover:border-sky-500 transition-colors space-y-1.5 ${subtlePanel}`}
+                        >
+                          <div className="font-bold text-sky-400">{item.titleEn}</div>
+                          <div className="text-[11px] text-amber-400">{item.titlePa}</div>
+                          <div
+                            className="overflow-x-auto py-1 text-xs"
+                            dangerouslySetInnerHTML={{
+                              __html: renderLatexToHtml(item.latex, false),
+                            }}
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="space-y-2 pt-1">
                   <div className="text-xs font-bold">Tap a Question:</div>
                   {[
                     'ਬਾਈਨਰੀ ਭਾਸ਼ਾ (0 ਅਤੇ 1) ਅਤੇ Assembly Language ਕਿਵੇਂ ਕੰਮ ਕਰਦੀ ਹੈ? ਬੱਚਿਆਂ ਵਾਂਗ ਸਮਝਾਓ।',
-                    'Explain Propositional Logic and De Morgan’s Laws in Punjabi with an example.',
-                    'Show step-by-step how to convert Decimal 75 into 8-bit Binary.',
+                    'Explain Propositional Logic and De Morgan’s Laws in Punjabi with LaTeX truth-table formulas.',
+                    'Show step-by-step with LaTeX how to convert Decimal 75 into 8-bit Binary and Hexadecimal.',
                   ].map((promptText) => (
                     <button
                       key={promptText}
@@ -1935,25 +2060,36 @@ export default function App() {
               <div
                 className={`lg:col-span-8 p-5 rounded-xl border flex flex-col justify-between min-h-[440px] ${surfaceCard}`}
               >
-                <div className="space-y-3 overflow-y-auto max-h-[360px] pr-1">
+                <div className="space-y-3 overflow-y-auto max-h-[420px] pr-1">
                   {tutorMessages.map((msg, idx) => (
                     <div
                       key={idx}
-                      className={`p-3.5 rounded-xl border text-xs sm:text-sm leading-relaxed whitespace-pre-line select-text ${
+                      className={`p-3.5 rounded-xl border text-xs sm:text-sm leading-relaxed select-text ${
                         msg.role === 'user'
                           ? 'bg-sky-600/15 border-sky-500/40 ml-4'
                           : `${subtlePanel} mr-2`
                       }`}
                     >
-                      <div className="text-[10px] font-mono opacity-60 mb-1">
-                        {msg.role === 'user' ? 'You' : 'Academy Professor (Punjabi + English)'}
+                      <div className="flex items-center justify-between gap-2 text-[10px] font-mono opacity-70 mb-1.5">
+                        <span>
+                          {msg.role === 'user' ? 'You' : 'Academy Professor (Punjabi + English)'}
+                        </span>
+                        {msg.mode && (
+                          <span className="text-sky-400">
+                            Mode: {msg.mode === 'math-step' ? 'math-step · KaTeX' : msg.mode}
+                          </span>
+                        )}
                       </div>
-                      <div>{msg.content}</div>
+                      <MathMessageRenderer
+                        content={msg.content}
+                        mode={msg.mode || tutorMode}
+                        darkMode={darkMode}
+                      />
                     </div>
                   ))}
                   {tutorLoading && (
                     <div className={`p-3.5 rounded-xl border text-xs font-mono ${subtlePanel}`}>
-                      Reasoning deeply in Punjabi & English...
+                      Reasoning deeply in Punjabi & English (rendering LaTeX formulas)...
                     </div>
                   )}
                 </div>
@@ -1963,23 +2099,53 @@ export default function App() {
                     e.preventDefault();
                     handleSendTutorPrompt();
                   }}
-                  className="pt-3 mt-3 border-t border-slate-500/20 flex items-center gap-2"
+                  className="pt-3 mt-3 border-t border-slate-500/20 space-y-2"
                 >
-                  <input
-                    type="text"
-                    placeholder="Ask in Punjabi or English..."
-                    value={tutorInput}
-                    onChange={(e) => setTutorInput(e.target.value)}
-                    className={`flex-1 px-3.5 py-2.5 rounded-xl border text-sm ${subtlePanel}`}
-                  />
-                  <button
-                    type="submit"
-                    disabled={tutorLoading}
-                    className="px-4 py-2.5 min-h-[44px] rounded-xl bg-sky-600 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-50 shrink-0"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>Ask</span>
-                  </button>
+                  {tutorMode === 'math-step' && (
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono">
+                      <span className="text-slate-400 mr-1">Insert LaTeX:</span>
+                      {[
+                        { label: '∑ Sum', snippet: '$\\sum_{i=0}^{n-1} b_i 2^i$' },
+                        { label: '2ⁿ Power', snippet: '$2^n$' },
+                        { label: '¬(A·B)', snippet: '$\\overline{A \\cdot B} = \\overline{A} + \\overline{B}$' },
+                        { label: 'Big-O', snippet: '$\\mathcal{O}(n \\log_2 n)$' },
+                        { label: 'RC τ', snippet: '$V_C(t) = V_0(1 - e^{-t/RC})$' },
+                      ].map((chip) => (
+                        <button
+                          key={chip.label}
+                          type="button"
+                          onClick={() =>
+                            setTutorInput((prev) => `${prev}${prev ? ' ' : ''}${chip.snippet}`)
+                          }
+                          className={`px-2 py-0.5 rounded border hover:border-sky-500 transition-colors ${subtlePanel}`}
+                        >
+                          {chip.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder={
+                        tutorMode === 'math-step'
+                          ? 'Ask a math/binary problem or enter LaTeX ($...$)...'
+                          : 'Ask in Punjabi or English...'
+                      }
+                      value={tutorInput}
+                      onChange={(e) => setTutorInput(e.target.value)}
+                      className={`flex-1 px-3.5 py-2.5 rounded-xl border text-sm ${subtlePanel}`}
+                    />
+                    <button
+                      type="submit"
+                      disabled={tutorLoading}
+                      className="px-4 py-2.5 min-h-[44px] rounded-xl bg-sky-600 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-50 shrink-0"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Ask</span>
+                    </button>
+                  </div>
                 </form>
               </div>
             </div>

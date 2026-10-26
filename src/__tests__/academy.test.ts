@@ -67,6 +67,10 @@ import {
   quizSessions,
   questions,
 } from '../db/schema.ts';
+import {
+  tokenizeMathAndText,
+  renderLatexToHtml,
+} from '../components/MathMessageRenderer.tsx';
 
 describe('Computer Fundamentals Academy — Security, Database, Assessment & Curriculum Audit Suite', () => {
   let sampleLessonId = 1;
@@ -401,6 +405,25 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
         });
       expect(lateSubmit.status).toBe(400);
       expect(lateSubmit.body.error).toMatch(/deadline/i);
+    });
+  });
+
+  describe('Phase 5: KaTeX LaTeX Rendering for AI Tutor (math-step mode)', () => {
+    it('tokenizes mixed Punjabi/English text, inline math ($...$), and block math ($$...$$) and renders KaTeX HTML', () => {
+      const sampleTutorOutput =
+        'ਡੈਸੀਮਲ $75_{10}$ ਨੂੰ ਬਾਈਨਰੀ ਵਿੱਚ ਬਦਲਣ ਲਈ:\n$$N_{10} = \\sum_{i=0}^{7} b_i \\cdot 2^i$$\nਇਸ ਲਈ ਉੱਤਰ $01001011_2$ ਹੈ।';
+      const tokens = tokenizeMathAndText(sampleTutorOutput);
+
+      expect(tokens.some((t) => t.type === 'inline-math' && t.content === '75_{10}')).toBe(true);
+      expect(
+        tokens.some(
+          (t) => t.type === 'block-math' && t.content === 'N_{10} = \\sum_{i=0}^{7} b_i \\cdot 2^i'
+        )
+      ).toBe(true);
+
+      const renderedBlock = renderLatexToHtml('N_{10} = \\sum_{i=0}^{7} b_i \\cdot 2^i', true);
+      expect(renderedBlock).toContain('katex-display');
+      expect(renderedBlock).toContain('katex-mathml');
     });
   });
 });
