@@ -235,19 +235,19 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
       expect(res.body.database.ok).toBe(true);
     });
 
-    it('maintains 9 courses, 18 bilingual lessons, and 100% syllabus coverage across repeated idempotent seeds', async () => {
+    it('maintains 13 courses, 26 bilingual lessons, and 100% syllabus coverage across repeated idempotent seeds', async () => {
       await ensureCurriculumSeeded(true);
       const res = await request(app).get('/api/curriculum');
       expect(res.status).toBe(200);
-      expect(res.body.courses.length).toBe(9);
-      expect(res.body.lessons.length).toBeGreaterThanOrEqual(18);
-      expect(res.body.quizzes.length).toBeGreaterThanOrEqual(18);
+      expect(res.body.courses.length).toBe(13);
+      expect(res.body.lessons.length).toBeGreaterThanOrEqual(26);
+      expect(res.body.quizzes.length).toBeGreaterThanOrEqual(26);
       expect(res.body.syllabusCoverage.coveragePercent).toBe(100);
       expect(res.body.syllabusCoverage.completeTopics).toBe(
         res.body.syllabusCoverage.totalBlueprintTopics
       );
       expect(res.body.syllabusCoverage.uncoveredTopics).toBe(0);
-    }, 30_000);
+    }, 45_000);
 
     it('enforces user-level data isolation on study tasks', async () => {
       // Ensure both users exist

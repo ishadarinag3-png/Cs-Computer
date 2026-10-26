@@ -76,6 +76,15 @@ export async function ensureCurriculumSeeded(force = false): Promise<void> {
       }
 
       await db.transaction(async (tx) => {
+        // Clean up any obsolete course records that are not part of the active SEED_COURSES catalog
+        const validCourseSlugs = new Set(SEED_COURSES.map((c) => c.slug));
+        const existingCoursesInDb = await tx.select().from(courses);
+        for (const existingCourse of existingCoursesInDb) {
+          if (!validCourseSlugs.has(existingCourse.slug)) {
+            await tx.delete(courses).where(eq(courses.id, existingCourse.id));
+          }
+        }
+
         // 1. Idempotently upsert Achievements Catalog
         for (const ach of INITIAL_ACHIEVEMENTS) {
           await tx
