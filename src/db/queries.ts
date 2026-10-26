@@ -1,5 +1,5 @@
 import { eq, desc, and } from 'drizzle-orm';
-import { db } from './index.ts';
+import { db, pool } from './index.ts';
 import {
   users,
   tasks,
@@ -10,6 +10,7 @@ import {
   lessonProgress,
   quizzes,
   questions,
+  quizSessions,
   quizAttempts,
   bookmarks,
   notes,
@@ -17,145 +18,270 @@ import {
   userAchievements,
   tutorMessages,
 } from './schema.ts';
-import { SEED_COURSES, INITIAL_ACHIEVEMENTS } from './seed-data.ts';
+import { SEED_COURSES, INITIAL_ACHIEVEMENTS, computeSyllabusCoverageReport } from './seed-data.ts';
 
-let isSeeding = false;
-let hasSeeded = false;
-
-export async function ensureCurriculumSeeded() {
-  if (hasSeeded || isSeeding) return;
-  isSeeding = true;
-  try {
-    const existingCourses = await db.select().from(courses);
-    if (existingCourses.length > 0) {
-      hasSeeded = true;
-      isSeeding = false;
-      return;
-    }
-
-    // Seed Achievements Catalog
-    for (const ach of INITIAL_ACHIEVEMENTS) {
-      await db
-        .insert(achievements)
-        .values(ach)
-        .onConflictDoNothing({ target: achievements.code });
-    }
-
-    // Seed Courses, Modules, Lessons, Quizzes, and Questions
-    for (const courseData of SEED_COURSES) {
-      const [insertedCourse] = await db
-        .insert(courses)
-        .values({
-          slug: courseData.slug,
-          levelNumber: courseData.levelNumber,
-          titleEn: courseData.titleEn,
-          titlePa: courseData.titlePa,
-          descriptionEn: courseData.descriptionEn,
-          descriptionPa: courseData.descriptionPa,
-          category: courseData.category,
-          estimatedHours: courseData.estimatedHours,
-          published: true,
-        })
-        .onConflictDoUpdate({
-          target: courses.slug,
-          set: { titleEn: courseData.titleEn },
-        })
-        .returning();
-
-      for (const modData of courseData.modules) {
-        const [insertedModule] = await db
-          .insert(modules)
-          .values({
-            courseId: insertedCourse.id,
-            orderIndex: modData.orderIndex,
-            titleEn: modData.titleEn,
-            titlePa: modData.titlePa,
-            summaryEn: modData.summaryEn,
-            summaryPa: modData.summaryPa,
-          })
-          .returning();
-
-        for (const lessonData of modData.lessons) {
-          const [insertedLesson] = await db
-            .insert(lessons)
-            .values({
-              slug: lessonData.slug,
-              courseId: insertedCourse.id,
-              moduleId: insertedModule.id,
-              orderIndex: lessonData.orderIndex,
-              titleEn: lessonData.titleEn,
-              titlePa: lessonData.titlePa,
-              objectivesJson: lessonData.objectivesJson,
-              prerequisitesJson: lessonData.prerequisitesJson,
-              childAnalogyEn: lessonData.childAnalogyEn,
-              childAnalogyPa: lessonData.childAnalogyPa,
-              technicalExplanationEn: lessonData.technicalExplanationEn,
-              technicalExplanationPa: lessonData.technicalExplanationPa,
-              practicalExampleEn: lessonData.practicalExampleEn,
-              practicalExamplePa: lessonData.practicalExamplePa,
-              codeDemo: lessonData.codeDemo,
-              misconceptionsJson: lessonData.misconceptionsJson,
-              terminologyJson: lessonData.terminologyJson,
-              interactiveLabId: lessonData.interactiveLabId,
-              exercisePromptEn: lessonData.exercisePromptEn,
-              exercisePromptPa: lessonData.exercisePromptPa,
-              summaryEn: lessonData.summaryEn,
-              summaryPa: lessonData.summaryPa,
-              furtherReadingJson: lessonData.furtherReadingJson,
-              published: true,
-            })
-            .onConflictDoUpdate({
-              target: lessons.slug,
-              set: { titleEn: lessonData.titleEn },
-            })
-            .returning();
-
-          if (lessonData.quiz) {
-            const [insertedQuiz] = await db
-              .insert(quizzes)
-              .values({
-                lessonId: insertedLesson.id,
-                titleEn: lessonData.quiz.titleEn,
-                titlePa: lessonData.quiz.titlePa,
-                timeLimitSeconds: lessonData.quiz.timeLimitSeconds,
-                passingScorePercent: lessonData.quiz.passingScorePercent,
-              })
-              .returning();
-
-            for (const qData of lessonData.quiz.questions) {
-              await db.insert(questions).values({
-                quizId: insertedQuiz.id,
-                questionType: qData.questionType,
-                topicTag: qData.topicTag,
-                promptEn: qData.promptEn,
-                promptPa: qData.promptPa,
-                optionsJson: qData.optionsJson,
-                correctAnswer: qData.correctAnswer,
-                explanationEn: qData.explanationEn,
-                explanationPa: qData.explanationPa,
-              });
-            }
-          }
-        }
-      }
-    }
-
-    hasSeeded = true;
-  } catch (error) {
-    console.error('Failed to seed curriculum:', error);
-    throw new Error('Failed to initialize curriculum database.', { cause: error });
-  } finally {
-    isSeeding = false;
+export class AppValidationError extends Error {
+  statusCode: number;
+  constructor(message: string, statusCode = 400) {
+    super(message);
+    this.name = 'AppValidationError';
+    this.statusCode = statusCode;
   }
 }
 
-export async function getOrCreateUser(uid: string, email: string, displayName?: string) {
+export async function checkDatabaseReadiness(): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
+  const start = Date.now();
+  try {
+    await pool.query('SELECT 1 AS ready');
+    return { ok: true, latencyMs: Date.now() - start };
+  } catch (err: any) {
+    return {
+      ok: false,
+      latencyMs: Date.now() - start,
+      error: 'Database connection check failed',
+    };
+  }
+}
+
+let seedingPromise: Promise<void> | null = null;
+let lastSeededLessonCount = 0;
+
+const EXPECTED_SEED_LESSON_COUNT = SEED_COURSES.reduce(
+  (sum, c) => sum + c.modules.reduce((mSum, m) => mSum + m.lessons.length, 0),
+  0
+);
+
+export async function ensureCurriculumSeeded(force = false): Promise<void> {
+  if (!force && lastSeededLessonCount >= EXPECTED_SEED_LESSON_COUNT) {
+    return;
+  }
+  if (seedingPromise) {
+    return seedingPromise;
+  }
+
+  seedingPromise = (async () => {
+    try {
+      if (!force) {
+        const existingCourses = await db.select().from(courses);
+        const existingLessons = await db.select().from(lessons);
+        const existingQuizzes = await db.select().from(quizzes);
+        if (
+          existingCourses.length >= SEED_COURSES.length &&
+          existingLessons.length >= EXPECTED_SEED_LESSON_COUNT &&
+          existingQuizzes.length >= EXPECTED_SEED_LESSON_COUNT
+        ) {
+          lastSeededLessonCount = existingLessons.length;
+          return;
+        }
+      }
+
+      await db.transaction(async (tx) => {
+        // 1. Idempotently upsert Achievements Catalog
+        for (const ach of INITIAL_ACHIEVEMENTS) {
+          await tx
+            .insert(achievements)
+            .values(ach)
+            .onConflictDoUpdate({
+              target: achievements.code,
+              set: {
+                titleEn: ach.titleEn,
+                titlePa: ach.titlePa,
+                descriptionEn: ach.descriptionEn,
+                descriptionPa: ach.descriptionPa,
+                xpReward: ach.xpReward,
+                iconName: ach.iconName,
+              },
+            });
+        }
+
+        // 2. Idempotently upsert Courses, Modules, Lessons, Quizzes, and Questions
+        for (const courseData of SEED_COURSES) {
+          const [insertedCourse] = await tx
+            .insert(courses)
+            .values({
+              slug: courseData.slug,
+              levelNumber: courseData.levelNumber,
+              titleEn: courseData.titleEn,
+              titlePa: courseData.titlePa,
+              descriptionEn: courseData.descriptionEn,
+              descriptionPa: courseData.descriptionPa,
+              category: courseData.category,
+              estimatedHours: courseData.estimatedHours,
+              published: true,
+            })
+            .onConflictDoUpdate({
+              target: courses.slug,
+              set: {
+                levelNumber: courseData.levelNumber,
+                titleEn: courseData.titleEn,
+                titlePa: courseData.titlePa,
+                descriptionEn: courseData.descriptionEn,
+                descriptionPa: courseData.descriptionPa,
+                category: courseData.category,
+                estimatedHours: courseData.estimatedHours,
+                published: true,
+              },
+            })
+            .returning();
+
+          for (const modData of courseData.modules) {
+            const [insertedModule] = await tx
+              .insert(modules)
+              .values({
+                courseId: insertedCourse.id,
+                orderIndex: modData.orderIndex,
+                titleEn: modData.titleEn,
+                titlePa: modData.titlePa,
+                summaryEn: modData.summaryEn,
+                summaryPa: modData.summaryPa,
+              })
+              .onConflictDoUpdate({
+                target: [modules.courseId, modules.orderIndex],
+                set: {
+                  titleEn: modData.titleEn,
+                  titlePa: modData.titlePa,
+                  summaryEn: modData.summaryEn,
+                  summaryPa: modData.summaryPa,
+                },
+              })
+              .returning();
+
+            for (const lessonData of modData.lessons) {
+              const [insertedLesson] = await tx
+                .insert(lessons)
+                .values({
+                  slug: lessonData.slug,
+                  courseId: insertedCourse.id,
+                  moduleId: insertedModule.id,
+                  orderIndex: lessonData.orderIndex,
+                  titleEn: lessonData.titleEn,
+                  titlePa: lessonData.titlePa,
+                  objectivesJson: lessonData.objectivesJson,
+                  prerequisitesJson: lessonData.prerequisitesJson,
+                  childAnalogyEn: lessonData.childAnalogyEn,
+                  childAnalogyPa: lessonData.childAnalogyPa,
+                  technicalExplanationEn: lessonData.technicalExplanationEn,
+                  technicalExplanationPa: lessonData.technicalExplanationPa,
+                  practicalExampleEn: lessonData.practicalExampleEn,
+                  practicalExamplePa: lessonData.practicalExamplePa,
+                  codeDemo: lessonData.codeDemo,
+                  misconceptionsJson: lessonData.misconceptionsJson,
+                  terminologyJson: lessonData.terminologyJson,
+                  interactiveLabId: lessonData.interactiveLabId,
+                  exercisePromptEn: lessonData.exercisePromptEn,
+                  exercisePromptPa: lessonData.exercisePromptPa,
+                  summaryEn: lessonData.summaryEn,
+                  summaryPa: lessonData.summaryPa,
+                  furtherReadingJson: lessonData.furtherReadingJson,
+                  published: true,
+                })
+                .onConflictDoUpdate({
+                  target: lessons.slug,
+                  set: {
+                    courseId: insertedCourse.id,
+                    moduleId: insertedModule.id,
+                    orderIndex: lessonData.orderIndex,
+                    titleEn: lessonData.titleEn,
+                    titlePa: lessonData.titlePa,
+                    objectivesJson: lessonData.objectivesJson,
+                    prerequisitesJson: lessonData.prerequisitesJson,
+                    childAnalogyEn: lessonData.childAnalogyEn,
+                    childAnalogyPa: lessonData.childAnalogyPa,
+                    technicalExplanationEn: lessonData.technicalExplanationEn,
+                    technicalExplanationPa: lessonData.technicalExplanationPa,
+                    practicalExampleEn: lessonData.practicalExampleEn,
+                    practicalExamplePa: lessonData.practicalExamplePa,
+                    codeDemo: lessonData.codeDemo,
+                    misconceptionsJson: lessonData.misconceptionsJson,
+                    terminologyJson: lessonData.terminologyJson,
+                    interactiveLabId: lessonData.interactiveLabId,
+                    exercisePromptEn: lessonData.exercisePromptEn,
+                    exercisePromptPa: lessonData.exercisePromptPa,
+                    summaryEn: lessonData.summaryEn,
+                    summaryPa: lessonData.summaryPa,
+                    furtherReadingJson: lessonData.furtherReadingJson,
+                    published: true,
+                    updatedAt: new Date(),
+                  },
+                })
+                .returning();
+
+              if (lessonData.quiz) {
+                const [insertedQuiz] = await tx
+                  .insert(quizzes)
+                  .values({
+                    lessonId: insertedLesson.id,
+                    titleEn: lessonData.quiz.titleEn,
+                    titlePa: lessonData.quiz.titlePa,
+                    timeLimitSeconds: lessonData.quiz.timeLimitSeconds,
+                    passingScorePercent: lessonData.quiz.passingScorePercent,
+                  })
+                  .onConflictDoUpdate({
+                    target: quizzes.lessonId,
+                    set: {
+                      titleEn: lessonData.quiz.titleEn,
+                      titlePa: lessonData.quiz.titlePa,
+                      timeLimitSeconds: lessonData.quiz.timeLimitSeconds,
+                      passingScorePercent: lessonData.quiz.passingScorePercent,
+                    },
+                  })
+                  .returning();
+
+                for (const qData of lessonData.quiz.questions) {
+                  await tx
+                    .insert(questions)
+                    .values({
+                      quizId: insertedQuiz.id,
+                      questionType: qData.questionType,
+                      topicTag: qData.topicTag,
+                      promptEn: qData.promptEn,
+                      promptPa: qData.promptPa,
+                      optionsJson: qData.optionsJson,
+                      correctAnswer: qData.correctAnswer,
+                      explanationEn: qData.explanationEn,
+                      explanationPa: qData.explanationPa,
+                    })
+                    .onConflictDoUpdate({
+                      target: [questions.quizId, questions.promptEn],
+                      set: {
+                        questionType: qData.questionType,
+                        topicTag: qData.topicTag,
+                        promptPa: qData.promptPa,
+                        optionsJson: qData.optionsJson,
+                        correctAnswer: qData.correctAnswer,
+                        explanationEn: qData.explanationEn,
+                        explanationPa: qData.explanationPa,
+                      },
+                    });
+                }
+              }
+            }
+          }
+        }
+      });
+
+      const finalLessons = await db.select().from(lessons);
+      lastSeededLessonCount = finalLessons.length;
+    } catch (error) {
+      console.error('Failed to seed curriculum:', error);
+      throw new Error('Failed to initialize curriculum database.', { cause: error });
+    } finally {
+      seedingPromise = null;
+    }
+  })();
+
+  return seedingPromise;
+}
+
+export async function getOrCreateUser(
+  uid: string,
+  email: string,
+  displayName?: string,
+  isTrustedAdmin = false
+) {
   try {
     const todayStr = new Date().toISOString().slice(0, 10);
-    const defaultRole =
-      email.toLowerCase().includes('babbushergill') || email.toLowerCase().includes('admin')
-        ? 'admin'
-        : 'student';
+    const assignedRole = isTrustedAdmin ? 'admin' : 'student';
 
     const result = await db
       .insert(users)
@@ -163,13 +289,14 @@ export async function getOrCreateUser(uid: string, email: string, displayName?: 
         uid,
         email,
         displayName: displayName || email.split('@')[0] || 'Scholar',
-        role: defaultRole,
+        role: assignedRole,
         lastActiveDate: todayStr,
       })
       .onConflictDoUpdate({
         target: users.uid,
         set: {
           email,
+          role: assignedRole,
           lastActiveDate: todayStr,
         },
       })
@@ -226,6 +353,11 @@ export async function getOrCreateUser(uid: string, email: string, displayName?: 
   }
 }
 
+export async function getUserByUid(uid: string) {
+  const [user] = await db.select().from(users).where(eq(users.uid, uid));
+  return user || null;
+}
+
 export async function updateUserSettings(
   uid: string,
   updates: { displayName?: string; preferredLanguage?: string; dailyGoalMinutes?: number }
@@ -246,20 +378,44 @@ export async function updateUserSettings(
 export async function getAllCurriculumData() {
   try {
     await ensureCurriculumSeeded();
-    const allCourses = await db.select().from(courses);
+    const allCourses = await db.select().from(courses).where(eq(courses.published, true));
     const allModules = await db.select().from(modules);
-    const allLessons = await db.select().from(lessons);
+    const allLessons = await db.select().from(lessons).where(eq(lessons.published, true));
     const allQuizzes = await db.select().from(quizzes);
     const allQuestions = await db.select().from(questions);
     const allAchievements = await db.select().from(achievements);
 
+    // SECURITY (Phase 1.5): Strip correctAnswer, explanationEn, and explanationPa from public quiz payloads!
+    const sanitizedQuestions = allQuestions.map((q) => ({
+      id: q.id,
+      quizId: q.quizId,
+      questionType: q.questionType,
+      topicTag: q.topicTag,
+      promptEn: q.promptEn,
+      promptPa: q.promptPa,
+      optionsJson: q.optionsJson,
+    }));
+
+    const sortedCourses = allCourses.sort((a, b) => a.levelNumber - b.levelNumber);
+    const courseLevelMap = new Map(sortedCourses.map((c) => [c.id, c.levelNumber]));
+    const sortedLessons = allLessons.sort((a, b) => {
+      const lvlA = courseLevelMap.get(a.courseId) ?? 99;
+      const lvlB = courseLevelMap.get(b.courseId) ?? 99;
+      if (lvlA !== lvlB) return lvlA - lvlB;
+      return a.orderIndex - b.orderIndex;
+    });
+
+    const coverageReport = computeSyllabusCoverageReport(sortedLessons.map((l) => l.slug));
+
     return {
-      courses: allCourses.sort((a, b) => a.levelNumber - b.levelNumber),
+      courses: sortedCourses,
       modules: allModules.sort((a, b) => a.orderIndex - b.orderIndex),
-      lessons: allLessons.sort((a, b) => a.orderIndex - b.orderIndex),
+      lessons: sortedLessons,
       quizzes: allQuizzes,
-      questions: allQuestions,
+      questions: sanitizedQuestions,
       achievements: allAchievements,
+      coverageReport,
+      syllabusCoverage: coverageReport,
     };
   } catch (error) {
     console.error('Database query failed in getAllCurriculumData:', error);
@@ -339,18 +495,21 @@ export async function evaluateAndUnlockAchievements(uid: string) {
         .from(userAchievements)
         .where(and(eq(userAchievements.userUid, uid), eq(userAchievements.achievementCode, code)));
       if (existing.length === 0) {
-        await db
+        const inserted = await db
           .insert(userAchievements)
           .values({ userUid: uid, achievementCode: code })
-          .onConflictDoNothing();
-        const [u] = await db.select().from(users).where(eq(users.uid, uid));
-        if (u) {
-          await db
-            .update(users)
-            .set({ xp: u.xp + xpBonus })
-            .where(eq(users.uid, uid));
+          .onConflictDoNothing()
+          .returning();
+        if (inserted.length > 0) {
+          const [u] = await db.select().from(users).where(eq(users.uid, uid));
+          if (u) {
+            await db
+              .update(users)
+              .set({ xp: u.xp + xpBonus })
+              .where(eq(users.uid, uid));
+          }
+          newlyUnlocked.push(code);
         }
-        newlyUnlocked.push(code);
       }
     };
 
@@ -422,11 +581,16 @@ export async function toggleTaskStatus(uid: string, taskId: number, completed: b
       .set({ completed })
       .where(and(eq(tasks.id, taskId), eq(tasks.userUid, uid)))
       .returning();
-    if (completed) {
-      await evaluateAndUnlockAchievements(uid);
+    if (!updated) {
+      throw new AppValidationError('Task not found for this user.', 404);
     }
-    return updated;
+    let newlyUnlocked: string[] = [];
+    if (completed) {
+      newlyUnlocked = await evaluateAndUnlockAchievements(uid);
+    }
+    return { task: updated, newlyUnlocked };
   } catch (error) {
+    if (error instanceof AppValidationError) throw error;
     console.error('Database query failed in toggleTaskStatus:', error);
     throw new Error('Failed to update task.', { cause: error });
   }
@@ -434,9 +598,16 @@ export async function toggleTaskStatus(uid: string, taskId: number, completed: b
 
 export async function deleteTaskForUser(uid: string, taskId: number) {
   try {
-    await db.delete(tasks).where(and(eq(tasks.id, taskId), eq(tasks.userUid, uid)));
+    const deletedRows = await db
+      .delete(tasks)
+      .where(and(eq(tasks.id, taskId), eq(tasks.userUid, uid)))
+      .returning();
+    if (deletedRows.length === 0) {
+      throw new AppValidationError('Task not found for this user.', 404);
+    }
     return { deleted: true };
   } catch (error) {
+    if (error instanceof AppValidationError) throw error;
     console.error('Database query failed in deleteTaskForUser:', error);
     throw new Error('Failed to delete task.', { cause: error });
   }
@@ -444,6 +615,23 @@ export async function deleteTaskForUser(uid: string, taskId: number) {
 
 export async function markLessonComplete(uid: string, lessonId: number, timeSpentMinutes = 10) {
   try {
+    // Phase 3.5: Validate lesson existence and publication status before recording progress
+    const [targetLesson] = await db.select().from(lessons).where(eq(lessons.id, lessonId));
+    if (!targetLesson) {
+      throw new AppValidationError('Lesson not found.', 404);
+    }
+    if (!targetLesson.published) {
+      throw new AppValidationError('Cannot record progress on an unpublished lesson.', 400);
+    }
+
+    // Phase 3.4: Check if lesson was already completed by this user to prevent duplicate XP farming
+    const [existingProgress] = await db
+      .select()
+      .from(lessonProgress)
+      .where(and(eq(lessonProgress.userUid, uid), eq(lessonProgress.lessonId, lessonId)));
+
+    const alreadyCompleted = Boolean(existingProgress?.completed);
+
     const [progress] = await db
       .insert(lessonProgress)
       .values({
@@ -456,51 +644,209 @@ export async function markLessonComplete(uid: string, lessonId: number, timeSpen
         target: [lessonProgress.userUid, lessonProgress.lessonId],
         set: {
           completed: true,
-          timeSpentMinutes,
-          completedAt: new Date(),
+          timeSpentMinutes: existingProgress
+            ? Math.max(existingProgress.timeSpentMinutes, timeSpentMinutes)
+            : timeSpentMinutes,
+          completedAt: existingProgress?.completedAt || new Date(),
         },
       })
       .returning();
 
-    // Award XP to user
-    const [u] = await db.select().from(users).where(eq(users.uid, uid));
-    if (u) {
-      await db
-        .update(users)
-        .set({ xp: u.xp + 50 })
-        .where(eq(users.uid, uid));
+    let xpAwarded = 0;
+    if (!alreadyCompleted) {
+      xpAwarded = 50;
+      const [u] = await db.select().from(users).where(eq(users.uid, uid));
+      if (u) {
+        await db
+          .update(users)
+          .set({ xp: u.xp + xpAwarded })
+          .where(eq(users.uid, uid));
+      }
     }
 
     const newlyUnlocked = await evaluateAndUnlockAchievements(uid);
-    return { progress, newlyUnlocked };
+    const [updatedUser] = await db.select().from(users).where(eq(users.uid, uid));
+
+    return {
+      progress,
+      xpAwarded,
+      xpEarned: xpAwarded,
+      alreadyCompleted,
+      userXp: updatedUser?.xp ?? 0,
+      newlyUnlocked,
+    };
   } catch (error) {
+    if (error instanceof AppValidationError) throw error;
     console.error('Database query failed in markLessonComplete:', error);
     throw new Error('Failed to record lesson completion.', { cause: error });
+  }
+}
+
+export async function startQuizSessionServerSide(
+  uid: string,
+  quizId: number,
+  mode: 'practice' | 'timed' = 'practice'
+) {
+  try {
+    const [quiz] = await db.select().from(quizzes).where(eq(quizzes.id, quizId));
+    if (!quiz) {
+      throw new AppValidationError('Quiz not found.', 404);
+    }
+
+    const existingSessions = await db
+      .select()
+      .from(quizSessions)
+      .where(and(eq(quizSessions.userUid, uid), eq(quizSessions.quizId, quizId)));
+
+    const oneHourAgo = Date.now() - 3600 * 1000;
+    const recentTimedSessions = existingSessions.filter(
+      (s) => s.mode === 'timed' && new Date(s.startedAt).getTime() > oneHourAgo
+    );
+    if (mode === 'timed' && recentTimedSessions.length >= 15) {
+      throw new AppValidationError(
+        'Too many timed quiz attempts started recently. Please wait before starting another timed session.',
+        429
+      );
+    }
+
+    const startedAt = new Date();
+    // Add 15s grace buffer for network latency on timed quizzes
+    const durationSeconds = mode === 'timed' ? quiz.timeLimitSeconds + 15 : 7200;
+    const expiresAt = new Date(startedAt.getTime() + durationSeconds * 1000);
+
+    const [session] = await db
+      .insert(quizSessions)
+      .values({
+        userUid: uid,
+        quizId,
+        mode,
+        startedAt,
+        expiresAt,
+      })
+      .returning();
+
+    return {
+      session: {
+        id: session.id,
+        quizId: session.quizId,
+        mode: session.mode,
+        timeLimitSeconds: quiz.timeLimitSeconds,
+        passingScorePercent: quiz.passingScorePercent,
+        startedAt: session.startedAt,
+        expiresAt: session.expiresAt,
+      },
+    };
+  } catch (error) {
+    if (error instanceof AppValidationError) throw error;
+    console.error('Database query failed in startQuizSessionServerSide:', error);
+    throw new Error('Failed to start quiz session.', { cause: error });
   }
 }
 
 export async function submitQuizAttemptServerSide(
   uid: string,
   quizId: number,
-  mode: string,
-  submittedAnswers: Record<string, string>
+  mode: 'practice' | 'timed',
+  submittedAnswers: Record<string, string>,
+  sessionId?: number
 ) {
   try {
+    const [quiz] = await db.select().from(quizzes).where(eq(quizzes.id, quizId));
+    if (!quiz) {
+      throw new AppValidationError('Quiz not found.', 404);
+    }
+
     const quizQuestions = await db
       .select()
       .from(questions)
       .where(eq(questions.quizId, quizId));
 
     if (quizQuestions.length === 0) {
-      throw new Error('Quiz has no questions.');
+      throw new AppValidationError('Quiz has no questions.', 400);
     }
 
+    // Phase 3.1: Enforce server-side quiz deadlines & single-submission session rules
+    let timeTakenSeconds = 0;
+    const now = new Date();
+
+    if (sessionId !== undefined) {
+      const [session] = await db
+        .select()
+        .from(quizSessions)
+        .where(
+          and(
+            eq(quizSessions.id, sessionId),
+            eq(quizSessions.userUid, uid),
+            eq(quizSessions.quizId, quizId)
+          )
+        );
+      if (!session) {
+        throw new AppValidationError('Invalid or unauthorized quiz session.', 400);
+      }
+      if (session.submittedAt !== null) {
+        throw new AppValidationError('This quiz session has already been submitted.', 400);
+      }
+      timeTakenSeconds = Math.max(
+        1,
+        Math.round((now.getTime() - new Date(session.startedAt).getTime()) / 1000)
+      );
+      if (mode === 'timed' && now.getTime() > new Date(session.expiresAt).getTime()) {
+        throw new AppValidationError(
+          `Quiz deadline exceeded (${quiz.timeLimitSeconds} seconds time limit).`,
+          400
+        );
+      }
+      await db
+        .update(quizSessions)
+        .set({ submittedAt: now })
+        .where(eq(quizSessions.id, session.id));
+    } else if (mode === 'timed') {
+      // Find latest unsubmitted timed session for this user & quiz
+      const activeSessions = await db
+        .select()
+        .from(quizSessions)
+        .where(
+          and(
+            eq(quizSessions.userUid, uid),
+            eq(quizSessions.quizId, quizId),
+            eq(quizSessions.mode, 'timed')
+          )
+        )
+        .orderBy(desc(quizSessions.startedAt));
+
+      const latestOpen = activeSessions.find((s) => s.submittedAt === null);
+      if (!latestOpen) {
+        throw new AppValidationError(
+          'Timed quiz requires an active server-started session. Please start the timed quiz first.',
+          400
+        );
+      }
+      timeTakenSeconds = Math.max(
+        1,
+        Math.round((now.getTime() - new Date(latestOpen.startedAt).getTime()) / 1000)
+      );
+      if (now.getTime() > new Date(latestOpen.expiresAt).getTime()) {
+        throw new AppValidationError(
+          `Quiz deadline exceeded (${quiz.timeLimitSeconds} seconds time limit).`,
+          400
+        );
+      }
+      await db
+        .update(quizSessions)
+        .set({ submittedAt: now })
+        .where(eq(quizSessions.id, latestOpen.id));
+    }
+
+    // Phase 3.3: Authoritative server-side grading (returns explanations ONLY after submission)
     let correctCount = 0;
     const gradedAnswers: Array<{
       questionId: number;
       submitted: string;
       isCorrect: boolean;
       topicTag: string;
+      correctAnswer: string;
+      explanationEn: string;
+      explanationPa: string;
     }> = [];
 
     for (const q of quizQuestions) {
@@ -512,12 +858,36 @@ export async function submitQuizAttemptServerSide(
         submitted: rawSubmitted,
         isCorrect,
         topicTag: q.topicTag,
+        correctAnswer: q.correctAnswer,
+        explanationEn: q.explanationEn,
+        explanationPa: q.explanationPa,
       });
     }
 
     const totalQuestions = quizQuestions.length;
     const scorePercent = Math.round((correctCount / totalQuestions) * 100);
-    const passed = scorePercent >= 70;
+    // Phase 3.2: Use configured passingScorePercent for the quiz
+    const passed = scorePercent >= quiz.passingScorePercent;
+
+    // Phase 3.4: Prevent unintended quiz XP farming by checking prior attempts
+    const priorAttempts = await db
+      .select()
+      .from(quizAttempts)
+      .where(and(eq(quizAttempts.userUid, uid), eq(quizAttempts.quizId, quizId)));
+
+    const hadPassedBefore = priorAttempts.some((a) => a.passed);
+    const hadAttemptedBefore = priorAttempts.length > 0;
+
+    let xpAwarded = 0;
+    if (!hadPassedBefore) {
+      if (passed && !hadAttemptedBefore) {
+        xpAwarded = 100;
+      } else if (passed && hadAttemptedBefore) {
+        xpAwarded = 75; // Awarded 25 on first try, now awards remaining 75 upon passing
+      } else if (!passed && !hadAttemptedBefore) {
+        xpAwarded = 25;
+      }
+    }
 
     const [attempt] = await db
       .insert(quizAttempts)
@@ -529,21 +899,34 @@ export async function submitQuizAttemptServerSide(
         totalQuestions,
         passed,
         mode,
+        timeTakenSeconds,
         answersJson: gradedAnswers,
       })
       .returning();
 
-    const [u] = await db.select().from(users).where(eq(users.uid, uid));
-    if (u) {
-      await db
-        .update(users)
-        .set({ xp: u.xp + (passed ? 100 : 25) })
-        .where(eq(users.uid, uid));
+    if (xpAwarded > 0) {
+      const [u] = await db.select().from(users).where(eq(users.uid, uid));
+      if (u) {
+        await db
+          .update(users)
+          .set({ xp: u.xp + xpAwarded })
+          .where(eq(users.uid, uid));
+      }
     }
 
     const newlyUnlocked = await evaluateAndUnlockAchievements(uid);
-    return { attempt, newlyUnlocked };
+    const [updatedUser] = await db.select().from(users).where(eq(users.uid, uid));
+
+    return {
+      attempt,
+      xpAwarded,
+      xpEarned: xpAwarded,
+      passingScorePercent: quiz.passingScorePercent,
+      userXp: updatedUser?.xp ?? 0,
+      newlyUnlocked,
+    };
   } catch (error) {
+    if (error instanceof AppValidationError) throw error;
     console.error('Database query failed in submitQuizAttemptServerSide:', error);
     throw new Error('Failed to grade quiz submission.', { cause: error });
   }
@@ -551,6 +934,11 @@ export async function submitQuizAttemptServerSide(
 
 export async function toggleBookmarkForUser(uid: string, lessonId: number) {
   try {
+    const [targetLesson] = await db.select().from(lessons).where(eq(lessons.id, lessonId));
+    if (!targetLesson) {
+      throw new AppValidationError('Lesson not found.', 404);
+    }
+
     const existing = await db
       .select()
       .from(bookmarks)
@@ -560,12 +948,13 @@ export async function toggleBookmarkForUser(uid: string, lessonId: number) {
       await db
         .delete(bookmarks)
         .where(and(eq(bookmarks.userUid, uid), eq(bookmarks.lessonId, lessonId)));
-      return { bookmarked: false };
+      return { bookmarked: false, lessonId };
     } else {
       await db.insert(bookmarks).values({ userUid: uid, lessonId });
-      return { bookmarked: true };
+      return { bookmarked: true, lessonId };
     }
   } catch (error) {
+    if (error instanceof AppValidationError) throw error;
     console.error('Database query failed in toggleBookmarkForUser:', error);
     throw new Error('Failed to toggle bookmark.', { cause: error });
   }
@@ -573,26 +962,23 @@ export async function toggleBookmarkForUser(uid: string, lessonId: number) {
 
 export async function saveNoteForUser(uid: string, lessonId: number, content: string) {
   try {
-    const existing = await db
-      .select()
-      .from(notes)
-      .where(and(eq(notes.userUid, uid), eq(notes.lessonId, lessonId)));
-
-    if (existing.length > 0) {
-      const [updated] = await db
-        .update(notes)
-        .set({ content, updatedAt: new Date() })
-        .where(eq(notes.id, existing[0].id))
-        .returning();
-      return updated;
-    } else {
-      const [created] = await db
-        .insert(notes)
-        .values({ userUid: uid, lessonId, content })
-        .returning();
-      return created;
+    const [targetLesson] = await db.select().from(lessons).where(eq(lessons.id, lessonId));
+    if (!targetLesson) {
+      throw new AppValidationError('Lesson not found.', 404);
     }
+
+    const [saved] = await db
+      .insert(notes)
+      .values({ userUid: uid, lessonId, content })
+      .onConflictDoUpdate({
+        target: [notes.userUid, notes.lessonId],
+        set: { content, updatedAt: new Date() },
+      })
+      .returning();
+
+    return saved;
   } catch (error) {
+    if (error instanceof AppValidationError) throw error;
     console.error('Database query failed in saveNoteForUser:', error);
     throw new Error('Failed to save note.', { cause: error });
   }
@@ -615,8 +1001,13 @@ export async function upsertLessonInSyllabus(payload: {
   objectivesJson: string[];
 }) {
   try {
+    const [targetCourse] = await db.select().from(courses).where(eq(courses.id, payload.courseId));
+    if (!targetCourse) {
+      throw new AppValidationError('Target course not found.', 404);
+    }
+
     // Find or create module for course
-    let courseModules = await db
+    const courseModules = await db
       .select()
       .from(modules)
       .where(eq(modules.courseId, payload.courseId));
@@ -641,6 +1032,7 @@ export async function upsertLessonInSyllabus(payload: {
       const [updated] = await db
         .update(lessons)
         .set({
+          courseId: payload.courseId,
           titleEn: payload.titleEn,
           titlePa: payload.titlePa,
           childAnalogyEn: payload.childAnalogyEn,
@@ -656,6 +1048,9 @@ export async function upsertLessonInSyllabus(payload: {
         })
         .where(eq(lessons.id, payload.id))
         .returning();
+      if (!updated) {
+        throw new AppValidationError('Lesson to update was not found.', 404);
+      }
       return updated;
     } else {
       const [inserted] = await db
@@ -678,13 +1073,46 @@ export async function upsertLessonInSyllabus(payload: {
           objectivesJson: payload.objectivesJson,
           summaryEn: payload.titleEn,
           summaryPa: payload.titlePa,
+          published: true,
+        })
+        .onConflictDoUpdate({
+          target: lessons.slug,
+          set: {
+            courseId: payload.courseId,
+            titleEn: payload.titleEn,
+            titlePa: payload.titlePa,
+            childAnalogyEn: payload.childAnalogyEn,
+            childAnalogyPa: payload.childAnalogyPa,
+            technicalExplanationEn: payload.technicalExplanationEn,
+            technicalExplanationPa: payload.technicalExplanationPa,
+            practicalExampleEn: payload.practicalExampleEn,
+            practicalExamplePa: payload.practicalExamplePa,
+            codeDemo: payload.codeDemo,
+            interactiveLabId: payload.interactiveLabId,
+            objectivesJson: payload.objectivesJson,
+            updatedAt: new Date(),
+          },
         })
         .returning();
       return inserted;
     }
   } catch (error) {
+    if (error instanceof AppValidationError) throw error;
     console.error('Database query failed in upsertLessonInSyllabus:', error);
     throw new Error('Failed to save lesson in syllabus.', { cause: error });
+  }
+}
+
+export async function countRecentUserTutorMessages(uid: string, sinceMs = 24 * 3600 * 1000): Promise<number> {
+  try {
+    const history = await db
+      .select()
+      .from(tutorMessages)
+      .where(and(eq(tutorMessages.userUid, uid), eq(tutorMessages.role, 'user')));
+    const cutoff = Date.now() - sinceMs;
+    return history.filter((m) => new Date(m.createdAt).getTime() >= cutoff).length;
+  } catch {
+    return 0;
   }
 }
 

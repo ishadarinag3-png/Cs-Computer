@@ -178,29 +178,94 @@ export const ComputerLaboratory: React.FC<Props> = ({ initialLab = 'hardware-exp
   const [selectedPartId, setSelectedPartId] = useState<string>('cpu');
   const selectedPart = HARDWARE_PARTS.find((p) => p.id === selectedPartId) || HARDWARE_PARTS[0];
 
-  // --- Sim B: CPU Instruction Cycle State ---
+  // --- Sim B: CPU Instruction Cycle State (Accurate 4-Stage Pipeline) ---
   const [cpuStepIndex, setCpuStepIndex] = useState<number>(0); // 0..3 instruction index
   const [cpuStage, setCpuStage] = useState<'FETCH' | 'DECODE' | 'EXECUTE' | 'WRITEBACK'>('FETCH');
   const [cpuPlaying, setCpuPlaying] = useState<boolean>(false);
+  const [regIR, setRegIR] = useState<string>('LOAD R1, #14');
+  const [decodedSummary, setDecodedSummary] = useState<string>('Waiting for DECODE stage...');
+  const [aluOutputLatch, setAluOutputLatch] = useState<string>('Idle');
   const [regR1, setRegR1] = useState<number>(0);
   const [regR2, setRegR2] = useState<number>(0);
   const [regACC, setRegACC] = useState<number>(0);
   const [ram0x10, setRam0x10] = useState<number>(0);
 
+  const currentCpuInstruction = CPU_PROGRAM[cpuStepIndex];
+
+  const getCpuStageActionDescription = () => {
+    const instr = CPU_PROGRAM[cpuStepIndex];
+    if (cpuStage === 'FETCH') {
+      return {
+        en: `FETCH Stage: Control Unit reads instruction "${instr.instr}" from RAM address ${instr.addr} (pointed to by PC) into the Instruction Register (IR). Architectural registers have not changed yet.`,
+        pa: `FETCH ਪੜਾਅ: Control Unit ਨੇ PC (${instr.addr}) ਵਾਲੇ ਪਤੇ ਤੋਂ ਹੁਕਮ "${instr.instr}" ਪੜ੍ਹ ਕੇ Instruction Register (IR) ਵਿੱਚ ਲੋਡ ਕੀਤਾ ਹੈ।`,
+      };
+    }
+    if (cpuStage === 'DECODE') {
+      return {
+        en: `DECODE Stage: Control Unit decodes opcode and operand targets (${decodedSummary}). No register or memory write has occurred yet.`,
+        pa: `DECODE ਪੜਾਅ: Control Unit ਨੇ ਹੁਕਮ ਦਾ ਮਤਲਬ ਸਮਝ ਲਿਆ ਹੈ (${decodedSummary}) ਅਤੇ ALU/Registers ਦੇ ਸਿਗਨਲ ਤਿਆਰ ਕੀਤੇ ਹਨ।`,
+      };
+    }
+    if (cpuStage === 'EXECUTE') {
+      return {
+        en: `EXECUTE Stage: ALU / Execution Unit computes the operation result in its internal latch (${aluOutputLatch}). Architectural registers/RAM will be updated in WRITEBACK.`,
+        pa: `EXECUTE ਪੜਾਅ: ALU ਨੇ ਗਣਨਾ ਪੂਰੀ ਕਰਕੇ ਨਤੀਜਾ (${aluOutputLatch}) ਤਿਆਰ ਕਰ ਲਿਆ ਹੈ। ਅਗਲੇ ਪੜਾਅ (WRITEBACK) ਵਿੱਚ ਇਹ ਰਜਿਸਟਰ/RAM ਵਿੱਚ ਸੇਵ ਹੋਵੇਗਾ।`,
+      };
+    }
+    return {
+      en: `WRITEBACK Stage: Result (${aluOutputLatch}) is committed to the destination register or RAM address, completing "${instr.instr}".`,
+      pa: `WRITEBACK ਪੜਾਅ: ਨਤੀਜਾ (${aluOutputLatch}) ਪੱਕੇ ਤੌਰ 'ਤੇ ਸਬੰਧਤ Register ਜਾਂ RAM [0x10] ਵਿੱਚ ਲਿਖ ਦਿੱਤਾ ਗਿਆ ਹੈ!`,
+    };
+  };
+
   const advanceCpuCycle = () => {
     const currentInstr = CPU_PROGRAM[cpuStepIndex];
     if (cpuStage === 'FETCH') {
+      // Transition FETCH -> DECODE: Decode the fetched instruction without mutating R1/R2/ACC/RAM
+      setRegIR(currentInstr.instr);
+      if (currentInstr.op === 'LOAD_R1') {
+        setDecodedSummary('Opcode: LOAD_IMM · Target: R1 · Immediate Operand: #14');
+      } else if (currentInstr.op === 'LOAD_R2') {
+        setDecodedSummary('Opcode: LOAD_IMM · Target: R2 · Immediate Operand: #28');
+      } else if (currentInstr.op === 'ADD') {
+        setDecodedSummary(`Opcode: ALU_ADD · Dest: ACC · Inputs: R1 (${regR1}) + R2 (${regR2})`);
+      } else {
+        setDecodedSummary(`Opcode: MEM_STORE · Source: ACC (${regACC}) -> Dest RAM: [0x10]`);
+      }
+      setAluOutputLatch('Ready to Execute');
       setCpuStage('DECODE');
     } else if (cpuStage === 'DECODE') {
+      // Transition DECODE -> EXECUTE: Compute value in ALU / Execution Latch without committing to registers yet
+      if (currentInstr.op === 'LOAD_R1') {
+        setAluOutputLatch('Immediate Value = 14 (Pending Write to R1)');
+      } else if (currentInstr.op === 'LOAD_R2') {
+        setAluOutputLatch('Immediate Value = 28 (Pending Write to R2)');
+      } else if (currentInstr.op === 'ADD') {
+        const sum = regR1 + regR2;
+        setAluOutputLatch(`ALU Sum: ${regR1} + ${regR2} = ${sum} (Pending Write to ACC)`);
+      } else if (currentInstr.op === 'STORE') {
+        setAluOutputLatch(`Bus Data: ${regACC} -> Address [0x10] (Pending RAM Write)`);
+      }
       setCpuStage('EXECUTE');
-      if (currentInstr.op === 'LOAD_R1') setRegR1(14);
-      if (currentInstr.op === 'LOAD_R2') setRegR2(28);
-      if (currentInstr.op === 'ADD') setRegACC(regR1 + regR2);
     } else if (cpuStage === 'EXECUTE') {
+      // Transition EXECUTE -> WRITEBACK: Commit computed result to architectural registers or RAM
+      if (currentInstr.op === 'LOAD_R1') {
+        setRegR1(14);
+        setAluOutputLatch('Committed: R1 <= 14');
+      } else if (currentInstr.op === 'LOAD_R2') {
+        setRegR2(28);
+        setAluOutputLatch('Committed: R2 <= 28');
+      } else if (currentInstr.op === 'ADD') {
+        const sum = regR1 + regR2;
+        setRegACC(sum);
+        setAluOutputLatch(`Committed: ACC <= ${sum}`);
+      } else if (currentInstr.op === 'STORE') {
+        setRam0x10(regACC);
+        setAluOutputLatch(`Committed: RAM[0x10] <= ${regACC}`);
+      }
       setCpuStage('WRITEBACK');
-      if (currentInstr.op === 'STORE') setRam0x10(regACC);
     } else {
-      // Move to next instruction
+      // Transition WRITEBACK -> Next instruction FETCH
       const nextIdx = (cpuStepIndex + 1) % CPU_PROGRAM.length;
       if (nextIdx === 0) {
         setRegR1(0);
@@ -209,13 +274,16 @@ export const ComputerLaboratory: React.FC<Props> = ({ initialLab = 'hardware-exp
         setRam0x10(0);
       }
       setCpuStepIndex(nextIdx);
+      setRegIR(CPU_PROGRAM[nextIdx].instr);
+      setDecodedSummary('Waiting for DECODE stage...');
+      setAluOutputLatch('Idle');
       setCpuStage('FETCH');
     }
   };
 
   useEffect(() => {
     if (!cpuPlaying) return;
-    const timer = setInterval(advanceCpuCycle, 1200);
+    const timer = setInterval(advanceCpuCycle, 1400);
     return () => clearInterval(timer);
   }, [cpuPlaying, cpuStage, cpuStepIndex, regR1, regR2, regACC]);
 
@@ -223,6 +291,9 @@ export const ComputerLaboratory: React.FC<Props> = ({ initialLab = 'hardware-exp
     setCpuPlaying(false);
     setCpuStepIndex(0);
     setCpuStage('FETCH');
+    setRegIR(CPU_PROGRAM[0].instr);
+    setDecodedSummary('Waiting for DECODE stage...');
+    setAluOutputLatch('Idle');
     setRegR1(0);
     setRegR2(0);
     setRegACC(0);
@@ -293,38 +364,38 @@ export const ComputerLaboratory: React.FC<Props> = ({ initialLab = 'hardware-exp
 
   const currentGateOutput = computeGate(gateType, inputA, inputB);
 
-  // --- Sim F: Network Packet Simulator State ---
-  const [packetHop, setPacketHop] = useState<number>(0); // 0: Client, 1: Switch, 2: Router, 3: DNS, 4: Server
+  // --- Sim F: Network Packet Simulator State (Accurate DNS-First Resolution Flow) ---
+  const [packetHop, setPacketHop] = useState<number>(0);
   const NETWORK_NODES = [
     {
-      name: '1. Client iPhone (192.168.1.15)',
-      pa: 'ਤੁਹਾਡਾ iPhone ਬ੍ਰਾਊਜ਼ਰ "academy.edu" ਖੋਲ੍ਹਣ ਦੀ ਬੇਨਤੀ ਬਣਾਉਂਦਾ ਹੈ।',
-      en: 'Browser creates an HTTP GET request encapsulated in a TCP/IP packet.',
-      header: 'SRC: 192.168.1.15 · MAC: AA:11 · PORT: 54122',
+      name: '1. DNS Query — Client to Resolver (UDP/53)',
+      pa: 'ਪਹਿਲਾਂ ਤੁਹਾਡਾ ਫ਼ੋਨ (192.168.1.15) DNS Resolver (8.8.8.8) ਨੂੰ ਪੁੱਛਦਾ ਹੈ: "academy.edu ਦਾ IP Address ਕੀ ਹੈ?"',
+      en: 'Before connecting to the web server, the client sends a DNS A-record query to resolver 8.8.8.8 (UDP port 53) via its local switch/gateway.',
+      header: 'DNS QUERY: Who is academy.edu? · SRC: 192.168.1.15 -> DST: 8.8.8.8:53',
     },
     {
-      name: '2. Local LAN Switch (Layer 2)',
-      pa: 'Switch MAC Address ਦੇਖ ਕੇ ਪੈਕਟ ਨੂੰ ਘਰ ਦੇ Router ਵੱਲ ਭੇਜਦਾ ਹੈ।',
-      en: 'Layer-2 Switch inspects Ethernet MAC table and forwards frame to Default Gateway.',
-      header: 'L2 FRAME -> GATEWAY MAC: BB:22',
+      name: '2. DNS Resolution — IP Returned to Client',
+      pa: 'DNS Resolver ਡਾਇਰੀ ਵਿੱਚੋਂ ਲੱਭ ਕੇ ਫ਼ੋਨ ਨੂੰ ਜਵਾਬ ਦਿੰਦਾ ਹੈ ਕਿ "academy.edu" ਦਾ IP Address 93.184.216.34 ਹੈ।',
+      en: 'DNS Resolver returns the authoritative IPv4 address (93.184.216.34) back to the client OS DNS cache.',
+      header: 'DNS RESPONSE: academy.edu => 93.184.216.34 (TTL 300s)',
     },
     {
-      name: '3. DNS Resolver (8.8.8.8)',
-      pa: 'DNS ਡਾਇਰੀ ਵਿੱਚੋਂ "academy.edu" ਦਾ ਅਸਲ IP Address (93.184.216.34) ਲੱਭਦਾ ਹੈ!',
-      en: 'DNS translates human domain "academy.edu" into IPv4 address 93.184.216.34.',
-      header: 'DNS A-RECORD: academy.edu => 93.184.216.34',
+      name: '3. Client Creates HTTPS Packet to Server IP',
+      pa: 'ਹੁਣ ਅਸਲ IP ਪਤਾ ਲੱਗਣ ਤੋਂ ਬਾਅਦ, ਬ੍ਰਾਊਜ਼ਰ 93.184.216.34 (Port 443) ਲਈ TCP/TLS ਤੇ HTTP GET ਪੈਕਟ ਬਣਾਉਂਦਾ ਹੈ।',
+      en: 'Using the resolved IP 93.184.216.34, the client initiates TCP/TLS handshake and encapsulates the HTTP GET request.',
+      header: 'SRC: 192.168.1.15:54122 -> DST: 93.184.216.34:443 (HTTPS)',
     },
     {
-      name: '4. Core Internet Router (Layer 3)',
-      pa: 'Router IP Address ਪੜ੍ਹ ਕੇ ਸਭ ਤੋਂ ਤੇਜ਼ ਰਸਤੇ ਰਾਹੀਂ ਪੈਕਟ ਨੂੰ ਸਰਵਰ ਦੇ ਸ਼ਹਿਰ ਵੱਲ ਤੋਰਦਾ ਹੈ।',
-      en: 'Layer-3 Router decrements TTL (64->63) and routes packet via BGP/OSPF table.',
-      header: 'DST IP: 93.184.216.34 · TTL: 63 · PROTO: HTTPS/443',
+      name: '4. L2 LAN Switch & L3 Internet Router Forwarding',
+      pa: 'Local Switch MAC ਫਰੇਮ ਨੂੰ Gateway Router ਵੱਲ ਭੇਜਦਾ ਹੈ, ਅਤੇ Internet Router TTL (64->63) ਘਟਾ ਕੇ ਪੈਕਟ ਨੂੰ ਸਰਵਰ ਵੱਲ ਤੋਰਦਾ ਹੈ।',
+      en: 'Layer-2 Switch forwards Ethernet frame to Default Gateway; Layer-3 Router decrements TTL (64->63) and routes packet via BGP/OSPF.',
+      header: 'L2 MAC -> GATEWAY · L3 DST IP: 93.184.216.34 · TTL: 63',
     },
     {
-      name: '5. Academy Web Server (93.184.216.34)',
-      pa: 'Server ਪੈਕਟ ਪ੍ਰਾਪਤ ਕਰਦਾ ਹੈ ਅਤੇ Encrypted (HTTPS) ਪਾਠ ਵਾਪਸ ਤੁਹਾਡੇ ਫ਼ੋਨ ਤੇ ਭੇਜਦਾ ਹੈ!',
-      en: 'Server processes request and returns TLS-encrypted 200 OK payload.',
-      header: 'HTTP/2 200 OK · TLS 1.3 AES-256-GCM',
+      name: '5. Academy Web Server Response (93.184.216.34)',
+      pa: 'Web Server ਪੈਕਟ ਪ੍ਰਾਪਤ ਕਰਦਾ ਹੈ ਅਤੇ TLS Encrypted (HTTP/2 200 OK) ਵੈੱਬਪੇਜ ਸਿੱਧਾ ਤੁਹਾਡੇ ਫ਼ੋਨ ਨੂੰ ਵਾਪਸ ਭੇਜਦਾ ਹੈ!',
+      en: 'Academy Web Server (93.184.216.34) processes the request and sends back the TLS 1.3 encrypted HTTP/2 200 OK response.',
+      header: 'SRC: 93.184.216.34:443 -> DST: 192.168.1.15 · HTTP/2 200 OK',
     },
   ];
 
@@ -397,6 +468,16 @@ export const ComputerLaboratory: React.FC<Props> = ({ initialLab = 'hardware-exp
 
   return (
     <div className="space-y-4 sm:space-y-6 w-full max-w-full overflow-x-hidden">
+      {/* Educational Simulation Disclaimer Banner */}
+      <div className={`px-4 py-2.5 rounded-xl border text-xs flex flex-wrap items-center justify-between gap-2 ${subtlePanel}`}>
+        <div>
+          <span className="font-bold text-sky-500">Educational Simulation Model · ਸਿੱਖਿਆਦਾਇਕ ਸਿਮੂਲੇਸ਼ਨ ਮਾਡਲ: </span>
+          <span>
+            These interactive laboratories are simplified educational simulations designed to teach core computer science concepts clearly, rather than cycle-accurate silicon hardware or physical network emulation.
+          </span>
+        </div>
+      </div>
+
       {/* Lab Selector Tabs */}
       <div className={`p-1.5 rounded-xl border w-full max-w-full overflow-x-auto no-scrollbar flex items-center gap-1.5 ${surfaceCard}`}>
         {LAB_TABS.map((tab) => {
@@ -615,15 +696,40 @@ export const ComputerLaboratory: React.FC<Props> = ({ initialLab = 'hardware-exp
               })}
             </div>
 
+            {/* Live Stage Action Explanation */}
+            <div className="p-3.5 rounded-xl border border-sky-500/40 bg-sky-500/10 space-y-1 text-xs">
+              <div className="font-bold text-sky-400">
+                Active Stage Action ({cpuStage}) · ਇਸ ਪੜਾਅ ਦੀ ਕਾਰਵਾਈ:
+              </div>
+              {langMode !== 'english' && (
+                <div className="font-medium">{getCpuStageActionDescription().pa}</div>
+              )}
+              {langMode !== 'punjabi' && (
+                <div className="text-slate-400">{getCpuStageActionDescription().en}</div>
+              )}
+            </div>
+
+            {/* Decoder & ALU Pipeline Latch Status */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 font-mono text-xs">
+              <div className={`p-3 rounded-lg border ${subtlePanel}`}>
+                <div className="text-slate-500">Control Unit Decoder Status</div>
+                <div className="font-bold text-sky-400 mt-0.5">{decodedSummary}</div>
+              </div>
+              <div className={`p-3 rounded-lg border ${subtlePanel}`}>
+                <div className="text-slate-500">ALU / Execution Latch</div>
+                <div className="font-bold text-amber-400 mt-0.5">{aluOutputLatch}</div>
+              </div>
+            </div>
+
             {/* CPU Registers & ALU Grid */}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 font-mono tabular-nums">
               <div className={`p-3.5 rounded-lg border ${subtlePanel}`}>
                 <div className="text-xs text-slate-500">Program Counter (PC)</div>
-                <div className="text-lg font-bold text-sky-500">{CPU_PROGRAM[cpuStepIndex].addr}</div>
+                <div className="text-lg font-bold text-sky-500">{currentCpuInstruction.addr}</div>
               </div>
               <div className={`p-3.5 rounded-lg border ${subtlePanel}`}>
                 <div className="text-xs text-slate-500">Instruction Register (IR)</div>
-                <div className="text-sm font-bold text-amber-500">{CPU_PROGRAM[cpuStepIndex].instr}</div>
+                <div className="text-sm font-bold text-amber-500">{regIR}</div>
               </div>
               <div className={`p-3.5 rounded-lg border ${subtlePanel}`}>
                 <div className="text-xs text-slate-500">Accumulator (ACC)</div>
@@ -983,9 +1089,11 @@ export const ComputerLaboratory: React.FC<Props> = ({ initialLab = 'hardware-exp
         <div className={`p-6 rounded-xl border space-y-6 ${surfaceCard}`}>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h3 className="text-lg font-bold">Simulation F: Network Packet Routing (Client → Switch → DNS → Router → Server)</h3>
+              <h3 className="text-lg font-bold">
+                Simulation F: DNS Resolution & Packet Routing (DNS Query → DNS Reply → HTTPS Packet → Switch/Router → Server)
+              </h3>
               <p className="text-xs text-slate-500">
-                Step through each network hop to see how IP addresses, MAC frames, and DNS work together
+                Simplified Educational Network Model — Step through DNS lookup (8.8.8.8) first, followed by TCP/IP packet routing to 93.184.216.34
               </p>
             </div>
             <div className="flex items-center gap-2">

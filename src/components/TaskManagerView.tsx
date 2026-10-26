@@ -55,7 +55,7 @@ export const TaskManagerView: React.FC<Props> = ({
 
   const requestPushPermission = async () => {
     if (typeof window === 'undefined' || !('Notification' in window)) {
-      setPushBannerMessage('In-app reminders enabled for this browser session.');
+      setPushBannerMessage('In-app browser-session reminders are active while this tab is open.');
       return;
     }
     try {
@@ -63,26 +63,26 @@ export const TaskManagerView: React.FC<Props> = ({
       setNotificationPermission(perm);
       if (perm === 'granted') {
         new Notification('Computer Fundamentals Academy', {
-          body: 'Push notifications enabled! You will be alerted for upcoming study tasks. (ਪੜ੍ਹਾਈ ਦੇ ਟਾਸਕ ਰੀਮਾਈਂਡਰ ਚਾਲੂ ਹੋ ਗਏ ਹਨ!)',
+          body: 'Browser-session notifications enabled! You will be alerted while this session is open. (ਬ੍ਰਾਊਜ਼ਰ ਸੈਸ਼ਨ ਰੀਮਾਈਂਡਰ ਚਾਲੂ ਹੋ ਗਏ ਹਨ!)',
         });
-        setPushBannerMessage('Push notifications are active for upcoming study deadlines.');
+        setPushBannerMessage('Browser-session notifications (Web Notification API) are active while the app is open.');
       } else {
-        setPushBannerMessage('In-app reminder alerts active.');
+        setPushBannerMessage('In-app session reminder banner alerts are active.');
       }
     } catch {
-      setPushBannerMessage('In-app reminder alerts active.');
+      setPushBannerMessage('In-app session reminder banner alerts are active.');
     }
   };
 
   const triggerTestReminder = () => {
     const nextPending = tasks.find((t) => !t.completed);
     const msg = nextPending
-      ? `Upcoming Study Task: "${nextPending.title}" (${nextPending.category})`
+      ? `Browser Session Reminder: "${nextPending.title}" (${nextPending.category})`
       : 'All caught up! Add a new binary or math study task to stay on your streak.';
 
     setPushBannerMessage(msg);
     if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-      new Notification('Study Reminder · ਪੜ੍ਹਾਈ ਰੀਮਾਈਂਡਰ', { body: msg });
+      new Notification('Study Session Reminder · ਪੜ੍ਹਾਈ ਰੀਮਾਈਂਡਰ', { body: msg });
     }
   };
 
@@ -90,7 +90,7 @@ export const TaskManagerView: React.FC<Props> = ({
     const upcoming = tasks.filter((t) => !t.completed && t.notifyEnabled);
     if (upcoming.length > 0 && !pushBannerMessage) {
       setPushBannerMessage(
-        `Reminder: You have ${upcoming.length} upcoming study ${
+        `Session Reminder: You have ${upcoming.length} upcoming study ${
           upcoming.length === 1 ? 'task' : 'tasks'
         } scheduled.`
       );
@@ -129,16 +129,16 @@ export const TaskManagerView: React.FC<Props> = ({
 
   return (
     <div className="space-y-6">
-      {/* Header & Push Notification Controls */}
+      {/* Header & Browser-Session Notification Controls */}
       <div className={`p-6 rounded-xl border flex flex-wrap items-center justify-between gap-4 ${surfaceCard}`}>
         <div>
           <h2 className="text-xl font-bold">
-            Study Task Planner & Real-Time Sync · ਸਟੱਡੀ ਟਾਸਕ ਮੈਨੇਜਰ
+            Study Task Planner & Cloud SQL Sync · ਸਟੱਡੀ ਟਾਸਕ ਮੈਨੇਜਰ
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
             {isAuthenticated
-              ? 'Synchronized live with your Cloud SQL PostgreSQL account'
-              : 'Sign in with Google in the header to persist your tasks across devices'}
+              ? 'Synchronized with your Cloud SQL PostgreSQL account · Browser-session alerts enabled'
+              : 'Guest Preview Mode — Sign in with Google in the header to persist your tasks to Cloud SQL'}
           </p>
         </div>
 
@@ -150,8 +150,8 @@ export const TaskManagerView: React.FC<Props> = ({
             <BellRing className="w-3.5 h-3.5" />
             <span>
               {notificationPermission === 'granted'
-                ? 'Push Notifications Active'
-                : 'Enable Push Notifications'}
+                ? 'Browser-Session Alerts Active'
+                : 'Enable Browser-Session Alerts'}
             </span>
           </button>
           <button
@@ -159,7 +159,7 @@ export const TaskManagerView: React.FC<Props> = ({
             className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-semibold ${subtlePanel}`}
           >
             <Bell className="w-3.5 h-3.5" />
-            <span>Test Upcoming Alert</span>
+            <span>Test Session Reminder</span>
           </button>
         </div>
       </div>

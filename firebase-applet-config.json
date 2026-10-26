@@ -3,6 +3,7 @@
   "appId": "1:626961294297:web:932369895dafee7e3fafc8",
   "apiKey": "AIzaSyBa3h17Zr2LJfF0ZxtrqhR-egWqhxMj1ms",
   "authDomain": "intelligent-cosine-kghtt.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-compsciacademy-b7e3c740-ee20-46fc-b6ea-318fe43911e6",
   "storageBucket": "intelligent-cosine-kghtt.firebasestorage.app",
   "messagingSenderId": "626961294297",
   "measurementId": "",

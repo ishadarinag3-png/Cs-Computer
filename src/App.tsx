@@ -27,7 +27,16 @@ import {
   Minimize2,
   Lock,
   Share,
+  ExternalLink,
+  Copy,
+  Check,
+  X,
+  AlertTriangle,
+  Globe,
+  Layers,
 } from 'lucide-react';
+
+const DEFAULT_APP_URL = 'https://ais-dev-kk7j6asjt23xaclt3gbpty-734066621115.asia-east1.run.app';
 
 type ActiveSection =
   | 'dashboard'
@@ -42,6 +51,51 @@ type ActiveSection =
   | 'admin'
   | 'iphone-settings';
 
+const GUEST_PROFILE = {
+  uid: 'guest',
+  email: 'guest@academy.local',
+  displayName: 'Guest Learner (Preview Mode)',
+  role: 'student',
+  preferredLanguage: 'bilingual' as const,
+  xp: 0,
+  streakDays: 0,
+  dailyGoalMinutes: 30,
+};
+
+const GUEST_DEMO_TASKS: StudyTask[] = [
+  {
+    id: -101,
+    title: '[Demo Sample] Master Binary (0 & 1) and Logic Gates in Lab D & E',
+    description: 'Sample preview task — Sign in with Google to save your own study tasks in Cloud SQL.',
+    category: 'Binary & Assembly',
+    priority: 'high',
+    dueDate: new Date(Date.now() + 86400000).toISOString().slice(0, 16),
+    completed: false,
+    notifyEnabled: false,
+    linkedLessonSlug: 'how-binary-and-logic-gates-work',
+  },
+  {
+    id: -102,
+    title: '[Demo Sample] Practice Discrete Math Sets & Propositional Logic',
+    description: 'Sample preview task — Review De Morgan’s Laws, Set Intersections, and Median vs Mean.',
+    category: 'Discrete Math',
+    priority: 'medium',
+    dueDate: new Date(Date.now() + 172800000).toISOString().slice(0, 16),
+    completed: false,
+    notifyEnabled: false,
+    linkedLessonSlug: 'cs-math-logic-discrete-statistics',
+  },
+];
+
+const INITIAL_TUTOR_WELCOME = [
+  {
+    role: 'assistant' as const,
+    content:
+      'ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ! (Welcome to Computer Fundamentals Academy!) 🎓\nਮੈਂ ਤੁਹਾਡਾ Bilingual AI Tutor ਹਾਂ। ਤੁਸੀਂ ਮੈਨੂੰ ਕੰਪਿਊਟਰ ਹਾਰਡਵੇਅਰ (CPU, RAM), ਬਾਈਨਰੀ ਭਾਸ਼ਾ (0 ਅਤੇ 1), Assembly Language, Algorithms ਜਾਂ ਕੰਪਿਊਟਰ ਸਾਇੰਸ ਦੇ ਗਣਿਤ (Logic, Discrete Math, Statistics) ਬਾਰੇ ਕੋਈ ਵੀ ਸਵਾਲ ਪੁੱਛ ਸਕਦੇ ਹੋ — ਮੈਂ ਬੱਚਿਆਂ ਵਾਂਗ ਸੌਖੀਆਂ ਉਦਾਹਰਣਾਂ ਦੇ ਕੇ ਸਮਝਾਵਾਂਗਾ!',
+    mode: 'child-friendly',
+  },
+];
+
 export default function App() {
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [idToken, setIdToken] = useState<string>('');
@@ -54,74 +108,60 @@ export default function App() {
     xp: number;
     streakDays: number;
     dailyGoalMinutes: number;
-  }>({
-    uid: 'guest',
-    email: 'guest@academy.edu',
-    displayName: 'Scholar',
-    role: 'student',
-    preferredLanguage: 'bilingual',
-    xp: 150,
-    streakDays: 3,
-    dailyGoalMinutes: 30,
-  });
+  }>(GUEST_PROFILE);
 
   const [darkMode, setDarkMode] = useState<boolean>(true);
-  const [oledBlackMode, setOledBlackMode] = useState<boolean>(true); // Optimized for iPhone 15 Pro Super Retina XDR
+  const [oledBlackMode, setOledBlackMode] = useState<boolean>(true);
   const [dynamicIslandSafePadding, setDynamicIslandSafePadding] = useState<boolean>(true);
   const [screenTouchLocked, setScreenTouchLocked] = useState<boolean>(true);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isStandalonePWA, setIsStandalonePWA] = useState<boolean>(false);
+  const [isInIframe, setIsInIframe] = useState<boolean>(false);
+  const [showDirectNotice, setShowDirectNotice] = useState<boolean>(true);
+  const [showIphoneModal, setShowIphoneModal] = useState<boolean>(false);
+  const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
+  const [isIOSDevice, setIsIOSDevice] = useState<boolean>(false);
+  const [directAppUrl, setDirectAppUrl] = useState<string>(() => {
+    if (typeof window !== 'undefined' && window.location.origin && window.location.origin !== 'null') {
+      return window.location.origin;
+    }
+    return DEFAULT_APP_URL;
+  });
 
   const [langMode, setLangMode] = useState<'bilingual' | 'punjabi' | 'english'>('bilingual');
   const [activeSection, setActiveSection] = useState<ActiveSection>('dashboard');
   const [selectedLabId, setSelectedLabId] = useState<LabId>('hardware-explorer');
 
-  // Curriculum Data from Cloud SQL API
+  // Curriculum Data & Async Loading/Error State
+  const [curriculumLoading, setCurriculumLoading] = useState<boolean>(true);
+  const [curriculumError, setCurriculumError] = useState<string | null>(null);
+  const [actionErrorMsg, setActionErrorMsg] = useState<string | null>(null);
   const [courses, setCourses] = useState<any[]>([]);
   const [lessons, setLessons] = useState<any[]>([]);
   const [quizzes, setQuizzes] = useState<any[]>([]);
   const [questions, setQuestions] = useState<any[]>([]);
   const [achievementsCatalog, setAchievementsCatalog] = useState<any[]>([]);
   const [syllabusBlueprint, setSyllabusBlueprint] = useState<any[]>([]);
+  const [syllabusCoverage, setSyllabusCoverage] = useState<any | null>(null);
   const [selectedLessonSlug, setSelectedLessonSlug] = useState<string>('what-is-a-computer-ipos');
 
-  // User Learning State
-  const [tasks, setTasks] = useState<StudyTask[]>([
-    {
-      id: 1,
-      title: 'Master Binary (0 & 1) and Logic Gates in Lab D & E',
-      description: 'Toggle 8-bit switches and test XOR / AND truth tables with Punjabi explanations.',
-      category: 'Binary & Assembly',
-      priority: 'high',
-      dueDate: new Date(Date.now() + 86400000).toISOString().slice(0, 16),
-      completed: false,
-      notifyEnabled: true,
-      linkedLessonSlug: 'how-binary-and-logic-gates-work',
-    },
-    {
-      id: 2,
-      title: 'Practice Discrete Math Sets & Propositional Logic',
-      description: 'Review De Morgan’s Laws, Set Intersections, and Median vs Mean in Level 9.',
-      category: 'Discrete Math',
-      priority: 'high',
-      dueDate: new Date(Date.now() + 172800000).toISOString().slice(0, 16),
-      completed: false,
-      notifyEnabled: true,
-      linkedLessonSlug: 'cs-math-logic-discrete-statistics',
-    },
-  ]);
+  // User Learning State (Separated from Guest Demo Samples)
+  const [tasks, setTasks] = useState<StudyTask[]>(GUEST_DEMO_TASKS);
   const [completedLessonIds, setCompletedLessonIds] = useState<number[]>([]);
   const [quizAttempts, setQuizAttempts] = useState<any[]>([]);
   const [bookmarkedLessonIds, setBookmarkedLessonIds] = useState<number[]>([]);
   const [lessonNotes, setLessonNotes] = useState<Record<number, string>>({});
-  const [unlockedCodes, setUnlockedCodes] = useState<string[]>(['FIRST_STEP']);
+  const [unlockedCodes, setUnlockedCodes] = useState<string[]>([]);
   const [celebrationBadge, setCelebrationBadge] = useState<string | null>(null);
 
   // Quiz Active State
   const [selectedQuizId, setSelectedQuizId] = useState<number | null>(null);
   const [quizMode, setQuizMode] = useState<'practice' | 'timed'>('practice');
+  const [activeQuizSessionId, setActiveQuizSessionId] = useState<number | null>(null);
   const [quizAnswers, setQuizAnswers] = useState<Record<string, string>>({});
   const [lastQuizResult, setLastQuizResult] = useState<any | null>(null);
+  const [quizSubmitError, setQuizSubmitError] = useState<string | null>(null);
+  const [quizSubmitting, setQuizSubmitting] = useState<boolean>(false);
   const [timeLeftSeconds, setTimeLeftSeconds] = useState<number>(300);
 
   // Note Input & Search State
@@ -134,14 +174,7 @@ export default function App() {
   const [tutorLoading, setTutorLoading] = useState<boolean>(false);
   const [tutorMessages, setTutorMessages] = useState<
     Array<{ role: 'user' | 'assistant'; content: string; mode?: string }>
-  >([
-    {
-      role: 'assistant',
-      content:
-        'ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ! (Welcome to Computer Fundamentals Academy!) 🎓\nਮੈਂ ਤੁਹਾਡਾ Bilingual AI Tutor ਹਾਂ। ਤੁਸੀਂ ਮੈਨੂੰ ਕੰਪਿਊਟਰ ਹਾਰਡਵੇਅਰ (CPU, RAM), ਬਾਈਨਰੀ ਭਾਸ਼ਾ (0 ਅਤੇ 1), Assembly Language, Algorithms ਜਾਂ ਕੰਪਿਊਟਰ ਸਾਇੰਸ ਦੇ ਗਣਿਤ (Logic, Discrete Math, Statistics) ਬਾਰੇ ਕੋਈ ਵੀ ਸਵਾਲ ਪੁੱਛ ਸਕਦੇ ਹੋ — ਮੈਂ ਬੱਚਿਆਂ ਵਾਂਗ ਸੌਖੀਆਂ ਉਦਾਹਰਣਾਂ ਦੇ ਕੇ ਸਮਝਾਵਾਂਗਾ!',
-      mode: 'child-friendly',
-    },
-  ]);
+  >(INITIAL_TUTOR_WELCOME);
 
   // Syllabus Editor State
   const [editCourseId, setEditCourseId] = useState<number>(1);
@@ -159,34 +192,110 @@ export default function App() {
   const [editLabId, setEditLabId] = useState<string>('hardware-explorer');
   const [adminStatusMsg, setAdminStatusMsg] = useState<string>('');
 
-  // Prevent multi-touch pinch zoom & horizontal finger drag on iOS Safari
+  const isAdmin = Boolean(firebaseUser && userProfile.role === 'admin');
+
+  // Reset all user-specific state on sign-out or account change
+  const resetUserSpecificState = () => {
+    setIdToken('');
+    setUserProfile(GUEST_PROFILE);
+    setTasks(GUEST_DEMO_TASKS);
+    setCompletedLessonIds([]);
+    setQuizAttempts([]);
+    setBookmarkedLessonIds([]);
+    setLessonNotes({});
+    setUnlockedCodes([]);
+    setCelebrationBadge(null);
+    setActiveQuizSessionId(null);
+    setQuizAnswers({});
+    setLastQuizResult(null);
+    setQuizSubmitError(null);
+    setNoteDraft('');
+    setAdminStatusMsg('');
+    setActionErrorMsg(null);
+    setTutorMessages(INITIAL_TUTOR_WELCOME);
+  };
+
+  // Authenticated fetch helper with automatic Firebase token refresh and 401 retry
+  const authenticatedFetch = async (url: string, init: RequestInit = {}): Promise<Response> => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      throw new Error('Please sign in with Google to save or access account data.');
+    }
+
+    let token = await currentUser.getIdToken(false);
+    setIdToken(token);
+
+    const makeRequest = (bearer: string) =>
+      fetch(url, {
+        ...init,
+        headers: {
+          ...(init.headers || {}),
+          Authorization: `Bearer ${bearer}`,
+        },
+      });
+
+    let response = await makeRequest(token);
+    if (response.status === 401) {
+      // Force token refresh once on 401
+      token = await currentUser.getIdToken(true);
+      setIdToken(token);
+      response = await makeRequest(token);
+      if (response.status === 401) {
+        resetUserSpecificState();
+        throw new Error('Your session expired. Please sign in again.');
+      }
+    }
+    return response;
+  };
+
+  // Detect standalone PWA & iOS environment (without blocking pinch-to-zoom accessibility)
   useEffect(() => {
     const checkStandalone =
-      window.matchMedia('(display-mode: standalone)').matches ||
-      (window.navigator as any).standalone === true;
-    setIsStandalonePWA(checkStandalone);
+      (typeof window !== 'undefined' &&
+        window.matchMedia('(display-mode: standalone)').matches) ||
+      (typeof window !== 'undefined' && (window.navigator as any).standalone === true);
+    setIsStandalonePWA(Boolean(checkStandalone));
 
-    const preventPinchZoom = (e: TouchEvent) => {
-      if (screenTouchLocked && e.touches.length > 1) {
-        e.preventDefault();
-      }
-    };
-    const preventGesture = (e: Event) => {
-      if (screenTouchLocked) {
-        e.preventDefault();
-      }
-    };
+    const checkIframe = typeof window !== 'undefined' && window.self !== window.top;
+    setIsInIframe(checkIframe);
 
-    document.addEventListener('touchmove', preventPinchZoom, { passive: false });
-    document.addEventListener('gesturestart', preventGesture);
-    document.addEventListener('gesturechange', preventGesture);
+    const isIOS =
+      typeof window !== 'undefined' &&
+      /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
+    setIsIOSDevice(isIOS);
 
-    return () => {
-      document.removeEventListener('touchmove', preventPinchZoom);
-      document.removeEventListener('gesturestart', preventGesture);
-      document.removeEventListener('gesturechange', preventGesture);
-    };
-  }, [screenTouchLocked]);
+    fetch('/api/app-info')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.appUrl) {
+          setDirectAppUrl(data.appUrl);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleOpenDirectApp = () => {
+    if (typeof window !== 'undefined') {
+      window.open(directAppUrl, '_blank');
+    }
+  };
+
+  const handleCopyDirectUrl = async () => {
+    try {
+      await navigator.clipboard.writeText(directAppUrl);
+      setCopiedUrl(true);
+      setTimeout(() => setCopiedUrl(false), 2500);
+    } catch {
+      const input = document.createElement('input');
+      input.value = directAppUrl;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand('copy');
+      document.body.removeChild(input);
+      setCopiedUrl(true);
+      setTimeout(() => setCopiedUrl(false), 2500);
+    }
+  };
 
   const toggleFullScreenMode = async () => {
     try {
@@ -196,22 +305,24 @@ export default function App() {
           setIsFullscreen(true);
         } else {
           // On iOS Safari where Fullscreen API requires Add to Home Screen, open iPhone 15 Pro settings guide
-          setActiveSection('iphone-settings');
+          setShowIphoneModal(true);
         }
       } else {
         await document.exitFullscreen();
         setIsFullscreen(false);
       }
     } catch {
-      setActiveSection('iphone-settings');
+      setShowIphoneModal(true);
     }
   };
 
-  // Fetch Curriculum from Backend
+  // Fetch Curriculum from Backend with loading, error, and retry support
   const fetchCurriculum = async () => {
+    setCurriculumLoading(true);
+    setCurriculumError(null);
     try {
       const res = await fetch('/api/curriculum');
-      if (!res.ok) throw new Error('Failed to load curriculum');
+      if (!res.ok) throw new Error(`Failed to load curriculum (HTTP ${res.status})`);
       const data = await res.json();
       setCourses(data.courses || []);
       setLessons(data.lessons || []);
@@ -219,6 +330,7 @@ export default function App() {
       setQuestions(data.questions || []);
       setAchievementsCatalog(data.achievements || []);
       setSyllabusBlueprint(data.syllabusBlueprint || []);
+      setSyllabusCoverage(data.syllabusCoverage || null);
       if (data.lessons?.length > 0 && !selectedLessonSlug) {
         setSelectedLessonSlug(data.lessons[0].slug);
       }
@@ -228,8 +340,11 @@ export default function App() {
       if (data.courses?.length > 0) {
         setEditCourseId(data.courses[0].id);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error loading curriculum:', err);
+      setCurriculumError(err.message || 'Unable to load curriculum from server.');
+    } finally {
+      setCurriculumLoading(false);
     }
   };
 
@@ -237,10 +352,16 @@ export default function App() {
     fetchCurriculum();
   }, []);
 
-  // Listen to Firebase Auth State & Synchronize with Cloud SQL
+  // Listen to Firebase Auth State & Synchronize with Cloud SQL (Resets state on sign-out or account change)
   useEffect(() => {
+    let previousUid: string | null = null;
     const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user || (previousUid && previousUid !== user.uid)) {
+        resetUserSpecificState();
+      }
+      previousUid = user ? user.uid : null;
       setFirebaseUser(user);
+
       if (user) {
         try {
           const token = await user.getIdToken();
@@ -256,26 +377,22 @@ export default function App() {
                 setLangMode(data.user.preferredLanguage);
               }
             }
-            if (data.tasks) setTasks(data.tasks);
-            if (data.lessonProgress) {
-              setCompletedLessonIds(
-                data.lessonProgress.filter((p: any) => p.completed).map((p: any) => p.lessonId)
-              );
-            }
-            if (data.quizAttempts) setQuizAttempts(data.quizAttempts);
-            if (data.bookmarks) {
-              setBookmarkedLessonIds(data.bookmarks.map((b: any) => b.lessonId));
-            }
-            if (data.notes) {
-              const map: Record<number, string> = {};
-              data.notes.forEach((n: any) => {
-                map[n.lessonId] = n.content;
-              });
-              setLessonNotes(map);
-            }
-            if (data.unlockedAchievements) {
-              setUnlockedCodes(data.unlockedAchievements.map((u: any) => u.achievementCode));
-            }
+            setTasks(data.tasks || []);
+            setCompletedLessonIds(
+              (data.lessonProgress || [])
+                .filter((p: any) => p.completed)
+                .map((p: any) => p.lessonId)
+            );
+            setQuizAttempts(data.quizAttempts || []);
+            setBookmarkedLessonIds((data.bookmarks || []).map((b: any) => b.lessonId));
+            const map: Record<number, string> = {};
+            (data.notes || []).forEach((n: any) => {
+              map[n.lessonId] = n.content;
+            });
+            setLessonNotes(map);
+            setUnlockedCodes(
+              (data.unlockedAchievements || []).map((u: any) => u.achievementCode)
+            );
             if (data.tutorHistory && data.tutorHistory.length > 0) {
               setTutorMessages(
                 data.tutorHistory.map((m: any) => ({
@@ -284,13 +401,14 @@ export default function App() {
                   mode: m.mode,
                 }))
               );
+            } else {
+              setTutorMessages(INITIAL_TUTOR_WELCOME);
             }
           }
         } catch (err) {
           console.error('Failed to sync authenticated user with backend:', err);
+          setActionErrorMsg('Unable to synchronize account profile. Please retry.');
         }
-      } else {
-        setIdToken('');
       }
     });
     return () => unsub();
@@ -315,190 +433,271 @@ export default function App() {
   }, [currentLesson?.id, lessonNotes]);
 
   const handleGoogleAuth = async () => {
+    setActionErrorMsg(null);
     if (firebaseUser) {
       await signOut(auth);
+      resetUserSpecificState();
     } else {
       try {
         await signInWithPopup(auth, googleAuthProvider);
-      } catch (err) {
+      } catch (err: any) {
         console.error('Google Sign-In error:', err);
+        setActionErrorMsg(err.message || 'Google Sign-In could not be completed.');
       }
     }
   };
 
   // Task Handlers
   const handleAddTask = async (newTask: Omit<StudyTask, 'id' | 'completed'>) => {
-    if (idToken) {
-      const res = await fetch('/api/tasks', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify(newTask),
-      });
-      if (res.ok) {
+    setActionErrorMsg(null);
+    if (firebaseUser) {
+      try {
+        const res = await authenticatedFetch('/api/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newTask),
+        });
         const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || 'Failed to create task');
+        }
         setTasks((prev) => [data.task, ...prev]);
-        return;
+      } catch (err: any) {
+        setActionErrorMsg(err.message || 'Could not save task.');
       }
+      return;
     }
     setTasks((prev) => [
-      { ...newTask, id: Date.now(), completed: false },
+      { ...newTask, title: `[Guest Demo] ${newTask.title}`, id: -Date.now(), completed: false },
       ...prev,
     ]);
   };
 
   const handleToggleTask = async (id: number, completed: boolean) => {
+    setActionErrorMsg(null);
+    if (firebaseUser && id > 0) {
+      try {
+        const res = await authenticatedFetch(`/api/tasks/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ completed }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || 'Failed to update task');
+        }
+        setTasks((prev) => prev.map((t) => (t.id === id ? data.task : t)));
+      } catch (err: any) {
+        setActionErrorMsg(err.message || 'Could not update task status.');
+      }
+      return;
+    }
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, completed } : t)));
-    if (completed && !unlockedCodes.includes('TASK_DISCIPLINE')) {
-      setUnlockedCodes((prev) => [...prev, 'TASK_DISCIPLINE']);
-      setCelebrationBadge('TASK_DISCIPLINE');
-    }
-    if (idToken) {
-      await fetch(`/api/tasks/${id}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({ completed }),
-      });
-    }
   };
 
   const handleDeleteTask = async (id: number) => {
-    setTasks((prev) => prev.filter((t) => t.id !== id));
-    if (idToken) {
-      await fetch(`/api/tasks/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
+    setActionErrorMsg(null);
+    if (firebaseUser && id > 0) {
+      try {
+        const res = await authenticatedFetch(`/api/tasks/${id}`, {
+          method: 'DELETE',
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || 'Failed to delete task');
+        }
+        setTasks((prev) => prev.filter((t) => t.id !== id));
+      } catch (err: any) {
+        setActionErrorMsg(err.message || 'Could not delete task.');
+      }
+      return;
     }
+    setTasks((prev) => prev.filter((t) => t.id !== id));
   };
 
-  // Mark Lesson Complete
+  // Mark Lesson Complete (Authoritative Server Persistence)
   const handleCompleteLesson = async (lessonId: number) => {
-    if (!completedLessonIds.includes(lessonId)) {
-      setCompletedLessonIds((prev) => [...prev, lessonId]);
-      setUserProfile((p) => ({ ...p, xp: p.xp + 50 }));
+    setActionErrorMsg(null);
+    if (!firebaseUser) {
+      setActionErrorMsg('Sign in with Google to save lesson completion and earn verified XP.');
+      return;
     }
-    if (idToken) {
-      const res = await fetch(`/api/lessons/${lessonId}/progress`, {
+    try {
+      const res = await authenticatedFetch(`/api/lessons/${lessonId}/progress`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ timeSpentMinutes: 15 }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.newlyUnlocked?.length > 0) {
-          setUnlockedCodes((prev) => [...new Set([...prev, ...data.newlyUnlocked])]);
-          setCelebrationBadge(data.newlyUnlocked[0]);
-        }
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to record lesson completion');
       }
-    } else if (!unlockedCodes.includes('FIRST_STEP')) {
-      setUnlockedCodes((prev) => [...prev, 'FIRST_STEP']);
-      setCelebrationBadge('FIRST_STEP');
+      if (!completedLessonIds.includes(lessonId)) {
+        setCompletedLessonIds((prev) => [...prev, lessonId]);
+      }
+      if (typeof data.xpEarned === 'number' && data.xpEarned > 0) {
+        setUserProfile((p) => ({ ...p, xp: p.xp + data.xpEarned }));
+      }
+      if (data.newlyUnlocked?.length > 0) {
+        setUnlockedCodes((prev) => [...new Set([...prev, ...data.newlyUnlocked])]);
+        setCelebrationBadge(data.newlyUnlocked[0]);
+      }
+    } catch (err: any) {
+      setActionErrorMsg(err.message || 'Could not save lesson progress.');
     }
   };
 
   // Bookmark & Note Handlers
   const handleToggleBookmark = async (lessonId: number) => {
-    const exists = bookmarkedLessonIds.includes(lessonId);
-    setBookmarkedLessonIds((prev) =>
-      exists ? prev.filter((id) => id !== lessonId) : [...prev, lessonId]
-    );
-    if (idToken) {
-      await fetch('/api/users/me/bookmarks', {
+    setActionErrorMsg(null);
+    if (!firebaseUser) {
+      setActionErrorMsg('Sign in with Google to save lesson bookmarks to your account.');
+      return;
+    }
+    try {
+      const res = await authenticatedFetch('/api/users/me/bookmarks', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lessonId }),
       });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update bookmark');
+      setBookmarkedLessonIds((prev) =>
+        data.bookmarked ? [...new Set([...prev, lessonId])] : prev.filter((id) => id !== lessonId)
+      );
+    } catch (err: any) {
+      setActionErrorMsg(err.message || 'Could not update bookmark.');
     }
   };
 
   const handleSaveNote = async (lessonId: number) => {
+    setActionErrorMsg(null);
     if (!noteDraft.trim()) return;
-    setLessonNotes((prev) => ({ ...prev, [lessonId]: noteDraft }));
-    if (idToken) {
-      await fetch('/api/users/me/notes', {
+    if (!firebaseUser) {
+      setActionErrorMsg('Sign in with Google to save personal study notes to Cloud SQL.');
+      return;
+    }
+    try {
+      const res = await authenticatedFetch('/api/users/me/notes', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lessonId, content: noteDraft }),
       });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save note');
+      setLessonNotes((prev) => ({ ...prev, [lessonId]: noteDraft }));
+    } catch (err: any) {
+      setActionErrorMsg(err.message || 'Could not save study note.');
     }
   };
 
-  // Quiz Submission
-  const handleSubmitQuiz = async (quizId: number) => {
-    const quizQuestions = questions.filter((q) => q.quizId === quizId);
-    if (idToken) {
-      const res = await fetch(`/api/quizzes/${quizId}/attempts`, {
+  // Start Server-Enforced Quiz Session (for Timed Mode or Explicit Session Tracking)
+  const startServerQuizSession = async (quizId: number, mode: 'practice' | 'timed') => {
+    setQuizSubmitError(null);
+    setLastQuizResult(null);
+    setQuizAnswers({});
+    const targetQuiz = quizzes.find((q) => q.id === quizId);
+    setTimeLeftSeconds(targetQuiz?.timeLimitSeconds || 300);
+
+    if (!firebaseUser) {
+      setActiveQuizSessionId(null);
+      return;
+    }
+
+    try {
+      const res = await authenticatedFetch(`/api/quizzes/${quizId}/start`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({ mode: quizMode, answers: quizAnswers }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        setLastQuizResult(data.attempt);
-        setQuizAttempts((prev) => [data.attempt, ...prev]);
-        if (data.newlyUnlocked?.length > 0) {
-          setUnlockedCodes((prev) => [...new Set([...prev, ...data.newlyUnlocked])]);
-          setCelebrationBadge(data.newlyUnlocked[0]);
+      const data = await res.json();
+      if (res.ok && data.session) {
+        setActiveQuizSessionId(data.session.id);
+        if (typeof data.timeLimitSeconds === 'number') {
+          setTimeLeftSeconds(data.timeLimitSeconds);
         }
-        return;
       }
-    }
-
-    let correctCount = 0;
-    const graded = quizQuestions.map((q) => {
-      const sub = (quizAnswers[String(q.id)] || '').trim();
-      const isCorrect = sub.toLowerCase() === q.correctAnswer.trim().toLowerCase();
-      if (isCorrect) correctCount++;
-      return { questionId: q.id, submitted: sub, isCorrect, topicTag: q.topicTag };
-    });
-    const scorePercent = Math.round((correctCount / Math.max(1, quizQuestions.length)) * 100);
-    const localAttempt = {
-      id: Date.now(),
-      quizId,
-      scorePercent,
-      correctCount,
-      totalQuestions: quizQuestions.length,
-      passed: scorePercent >= 70,
-      mode: quizMode,
-      answersJson: graded,
-      createdAt: new Date().toISOString(),
-    };
-    setLastQuizResult(localAttempt);
-    setQuizAttempts((prev) => [localAttempt, ...prev]);
-    if (scorePercent >= 80 && !unlockedCodes.includes('QUIZ_ACE')) {
-      setUnlockedCodes((prev) => [...prev, 'QUIZ_ACE']);
-      setCelebrationBadge('QUIZ_ACE');
+    } catch (err: any) {
+      console.error('Could not initialize quiz session:', err);
     }
   };
 
-  // AI Tutor Submission
+  // Quiz Submission (Strictly Server-Authoritative — Never displays unsaved results as saved)
+  const handleSubmitQuiz = async (quizId: number) => {
+    setQuizSubmitError(null);
+    if (!firebaseUser) {
+      setQuizSubmitError(
+        'Sign in with Google is required to grade and save official quiz attempts on the server.'
+      );
+      return;
+    }
+
+    if (Object.keys(quizAnswers).length === 0) {
+      setQuizSubmitError('Please select or enter at least one answer before submitting.');
+      return;
+    }
+
+    setQuizSubmitting(true);
+    try {
+      const res = await authenticatedFetch(`/api/quizzes/${quizId}/attempts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: quizMode,
+          answers: quizAnswers,
+          ...(activeQuizSessionId ? { sessionId: activeQuizSessionId } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to grade and save quiz attempt');
+      }
+
+      setLastQuizResult(data.attempt);
+      setQuizAttempts((prev) => [data.attempt, ...prev]);
+      setActiveQuizSessionId(null);
+      if (typeof data.xpEarned === 'number' && data.xpEarned > 0) {
+        setUserProfile((p) => ({ ...p, xp: p.xp + data.xpEarned }));
+      }
+      if (data.newlyUnlocked?.length > 0) {
+        setUnlockedCodes((prev) => [...new Set([...prev, ...data.newlyUnlocked])]);
+        setCelebrationBadge(data.newlyUnlocked[0]);
+      }
+    } catch (err: any) {
+      // Never display an unsaved or rejected quiz submission as a saved result
+      setLastQuizResult(null);
+      setQuizSubmitError(err.message || 'Quiz submission could not be saved.');
+    } finally {
+      setQuizSubmitting(false);
+    }
+  };
+
+  // AI Tutor Submission (Authenticated via verified token, never body UID)
   const handleSendTutorPrompt = async (customPrompt?: string) => {
     const queryText = (customPrompt ?? tutorInput).trim();
     if (!queryText || tutorLoading) return;
+
+    if (!firebaseUser) {
+      setTutorMessages((prev) => [
+        ...prev,
+        { role: 'user', content: queryText, mode: tutorMode },
+        {
+          role: 'assistant',
+          content:
+            'ਕਿਰਪਾ ਕਰਕੇ AI Tutor ਵਰਤਣ ਲਈ ਉੱਪਰ "Sign In" ਬਟਨ ਦਬਾ ਕੇ Google ਨਾਲ ਲੌਗਇਨ ਕਰੋ। (Please sign in with Google in the top bar to use the authenticated Bilingual AI Tutor.)',
+          mode: tutorMode,
+        },
+      ]);
+      setTutorInput('');
+      return;
+    }
+
     setTutorInput('');
     setTutorMessages((prev) => [...prev, { role: 'user', content: queryText, mode: tutorMode }]);
     setTutorLoading(true);
 
     try {
-      const res = await fetch('/api/ai/tutor', {
+      const res = await authenticatedFetch('/api/ai/tutor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -506,7 +705,6 @@ export default function App() {
           lessonTitle: currentLesson?.titleEn || 'Computer Science & Mathematics',
           lessonContext: currentLesson?.technicalExplanationEn || '',
           mode: tutorMode,
-          uid: firebaseUser?.uid,
         }),
       });
       const data = await res.json();
@@ -531,8 +729,12 @@ export default function App() {
     }
   };
 
-  // Load lesson into Syllabus Editor
+  // Load lesson into Syllabus Editor (Admin Only)
   const populateEditorWithLesson = (lesson: any) => {
+    if (!isAdmin) {
+      setActionErrorMsg('Administrator privileges are required to edit syllabus lessons.');
+      return;
+    }
     setEditLessonId(lesson.id);
     setEditCourseId(lesson.courseId);
     setEditSlug(lesson.slug);
@@ -551,10 +753,22 @@ export default function App() {
 
   const handleSaveSyllabusLesson = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAdminStatusMsg('');
+    if (!isAdmin) {
+      setAdminStatusMsg('Forbidden: Administrator privileges are required to modify the syllabus.');
+      return;
+    }
+
     const payload = {
       id: editLessonId,
       courseId: Number(editCourseId),
-      slug: editSlug || `custom-lesson-${Date.now()}`,
+      slug:
+        editSlug ||
+        editTitleEn
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-|-$/g, '') ||
+        `custom-lesson-${Date.now()}`,
       titleEn: editTitleEn,
       titlePa: editTitlePa,
       childAnalogyEn: editAnalogyEn,
@@ -568,29 +782,21 @@ export default function App() {
       objectivesJson: [editTitleEn],
     };
 
-    if (idToken) {
-      const res = await fetch('/api/admin/lessons', {
+    try {
+      const res = await authenticatedFetch('/api/admin/lessons', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      if (res.ok) {
-        setAdminStatusMsg('Lesson saved to Cloud SQL PostgreSQL and published to the curriculum!');
-        await fetchCurriculum();
-        return;
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to save syllabus lesson');
       }
+      setAdminStatusMsg('Lesson saved to Cloud SQL PostgreSQL and published to the curriculum!');
+      await fetchCurriculum();
+    } catch (err: any) {
+      setAdminStatusMsg(`Error: ${err.message || 'Failed to save syllabus lesson'}`);
     }
-
-    if (editLessonId) {
-      setLessons((prev) => prev.map((l) => (l.id === editLessonId ? { ...l, ...payload } : l)));
-    } else {
-      const newLesson = { ...payload, id: Date.now(), terminologyJson: [], misconceptionsJson: [] };
-      setLessons((prev) => [...prev, newLesson]);
-    }
-    setAdminStatusMsg('Lesson updated in your active syllabus!');
   };
 
   const allGlossaryTerms = lessons.flatMap((l) =>
@@ -629,6 +835,72 @@ export default function App() {
         screenTouchLocked ? 'touch-pan-y' : ''
       }`}
     >
+      {/* DIRECT LAUNCH NOTICE BANNER FOR IPHONE STANDALONE MODE */}
+      {showDirectNotice && !isStandalonePWA && (
+        <aside
+          aria-label="Direct iPhone Launcher"
+          className={`shrink-0 px-3 sm:px-6 py-2 border-b text-xs flex flex-wrap items-center justify-between gap-2 z-50 ${
+            darkMode
+              ? 'bg-amber-950/90 border-amber-800/80 text-amber-200'
+              : 'bg-amber-50 border-amber-300 text-amber-950'
+          }`}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <Smartphone className="w-4 h-4 text-amber-500 shrink-0" />
+            <span className="font-bold shrink-0">iPhone Full-Screen Mode:</span>
+            <span className="hidden md:inline opacity-90 truncate">
+              To open app without browser borders or AI Studio UI, launch via Direct Safari link before tapping "Add to Home Screen".
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0 ml-auto">
+            <a
+              href={directAppUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-2.5 py-1 min-h-[30px] rounded bg-sky-600 hover:bg-sky-500 text-white font-bold text-[11px] flex items-center gap-1 shadow-sm shrink-0"
+            >
+              <span>Open Direct App in Safari ↗</span>
+            </a>
+            <button
+              onClick={handleCopyDirectUrl}
+              className={`px-2.5 py-1 min-h-[30px] rounded border font-semibold text-[11px] flex items-center gap-1 shrink-0 ${
+                copiedUrl
+                  ? 'bg-emerald-600 text-white border-emerald-500'
+                  : darkMode
+                  ? 'bg-slate-900 border-slate-700 text-slate-200'
+                  : 'bg-white border-amber-400 text-amber-900'
+              }`}
+            >
+              {copiedUrl ? (
+                <>
+                  <Check className="w-3 h-3 text-white" />
+                  <span>Copied ✓</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3 h-3" />
+                  <span>Copy URL</span>
+                </>
+              )}
+            </button>
+            <button
+              onClick={() => setShowIphoneModal(true)}
+              className="px-2 py-1 min-h-[30px] rounded underline font-medium text-[11px] opacity-80 hover:opacity-100 shrink-0"
+            >
+              How-To Guide
+            </button>
+            <button
+              onClick={() => setShowDirectNotice(false)}
+              className="p-1 rounded opacity-60 hover:opacity-100 text-xs font-bold shrink-0 ml-1"
+              aria-label="Dismiss banner"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </aside>
+      )}
+
       {/* STRICT 3-ZONE TOP BAR CONTRACT (Locked at top, respects iPhone 15 Pro Dynamic Island safe area) */}
       <header
         className={`shrink-0 flex items-center justify-between gap-4 sm:gap-8 px-4 sm:px-6 py-2.5 sm:py-3.5 border-b ${
@@ -716,7 +988,7 @@ export default function App() {
               { id: 'bookmarks', label: 'Notes' },
               { id: 'achievements', label: 'Badges' },
               { id: 'admin', label: 'Syllabus' },
-              { id: 'iphone-settings', label: 'iPhone 15 Pro' },
+              { id: 'iphone-settings', label: '📱 iPhone 15 Pro' },
             ] as const
           ).map((item) => (
             <button
@@ -736,6 +1008,22 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            onClick={() => setShowIphoneModal(true)}
+            className={`px-2 py-1 min-h-[34px] rounded-lg border text-xs font-semibold flex items-center gap-1 shrink-0 ${
+              isStandalonePWA
+                ? 'border-emerald-500/50 text-emerald-400 bg-emerald-500/10'
+                : 'border-sky-500/40 text-sky-400 bg-sky-500/10 hover:bg-sky-500/20'
+            }`}
+            title="iPhone 15 Pro Standalone Mode"
+          >
+            <Smartphone className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">
+              {isStandalonePWA ? 'Standalone Active ✓' : 'Full-Screen Setup'}
+            </span>
+            <span className="sm:hidden">{isStandalonePWA ? 'PWA ✓' : 'Full Screen'}</span>
+          </button>
+
           <div className={`flex items-center gap-0.5 p-0.5 rounded-lg border ${subtlePanel}`}>
             {(
               [
@@ -778,6 +1066,39 @@ export default function App() {
       {/* SCROLLABLE VERTICAL CONTENT AREA (Strictly locked horizontally so finger never shifts screen) */}
       <main className="flex-1 w-full max-w-[100vw] overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y">
         <div className="max-w-7xl mx-auto px-3.5 sm:px-6 py-4 sm:py-6 space-y-6">
+          {/* GLOBAL LOADING / ERROR / RETRY BANNERS */}
+          {curriculumLoading && (
+            <div className={`p-4 rounded-xl border text-xs font-mono flex items-center justify-between ${subtlePanel}`}>
+              <span>Loading 9-Level Bilingual Curriculum & Interactive Labs from Cloud SQL...</span>
+            </div>
+          )}
+
+          {curriculumError && (
+            <div className="p-4 rounded-xl border border-rose-500/50 bg-rose-500/10 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="font-semibold text-rose-300">
+                Error loading curriculum: {curriculumError}
+              </div>
+              <button
+                onClick={fetchCurriculum}
+                className="px-3 py-1.5 rounded-lg bg-rose-600 text-white font-bold"
+              >
+                Retry Loading Curriculum
+              </button>
+            </div>
+          )}
+
+          {actionErrorMsg && (
+            <div className="p-3.5 rounded-xl border border-rose-500/50 bg-rose-500/15 flex items-center justify-between gap-3 text-xs">
+              <div className="font-semibold text-rose-200">{actionErrorMsg}</div>
+              <button
+                onClick={() => setActionErrorMsg(null)}
+                className="px-2.5 py-1 rounded bg-rose-600 text-white font-bold shrink-0"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
           {/* MILESTONE CELEBRATION BANNER */}
           {celebrationBadge && (
             <div className="p-3.5 rounded-xl border border-amber-500/50 bg-amber-500/15 flex items-center justify-between gap-3">
@@ -1086,18 +1407,20 @@ export default function App() {
               <div className={`lg:col-span-4 p-4 sm:p-5 rounded-xl border space-y-4 ${surfaceCard}`}>
                 <div className="flex items-center justify-between">
                   <h2 className="text-base font-bold">Courses & Levels (1–9)</h2>
-                  <button
-                    onClick={() => {
-                      setEditLessonId(undefined);
-                      setEditTitleEn('');
-                      setEditTitlePa('');
-                      setActiveSection('admin');
-                    }}
-                    className="text-xs text-sky-500 font-semibold flex items-center gap-1"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Add Lesson</span>
-                  </button>
+                  {isAdmin && (
+                    <button
+                      onClick={() => {
+                        setEditLessonId(undefined);
+                        setEditTitleEn('');
+                        setEditTitlePa('');
+                        setActiveSection('admin');
+                      }}
+                      className="text-xs text-sky-500 font-semibold flex items-center gap-1"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Lesson</span>
+                    </button>
+                  )}
                 </div>
 
                 <div className="space-y-2.5">
@@ -1187,13 +1510,15 @@ export default function App() {
                           </span>
                         </button>
 
-                        <button
-                          onClick={() => populateEditorWithLesson(currentLesson)}
-                          className={`px-3 py-2 min-h-[40px] rounded-lg border text-xs font-semibold flex items-center gap-1.5 ${subtlePanel}`}
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                          <span>Edit</span>
-                        </button>
+                        {isAdmin && (
+                          <button
+                            onClick={() => populateEditorWithLesson(currentLesson)}
+                            className={`px-3 py-2 min-h-[40px] rounded-lg border text-xs font-semibold flex items-center gap-1.5 ${subtlePanel}`}
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>Edit</span>
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -1385,7 +1710,13 @@ export default function App() {
                         setSelectedQuizId(qz.id);
                         setQuizAnswers({});
                         setLastQuizResult(null);
+                        setQuizSubmitError(null);
                         setTimeLeftSeconds(qz.timeLimitSeconds || 300);
+                        if (quizMode === 'timed') {
+                          startServerQuizSession(qz.id, 'timed');
+                        } else {
+                          setActiveQuizSessionId(null);
+                        }
                       }}
                       className={`w-full text-left p-3.5 min-h-[48px] rounded-xl border text-xs transition-colors ${
                         selectedQuizId === qz.id
@@ -1414,7 +1745,11 @@ export default function App() {
                           <p className="text-sm text-amber-500 font-semibold">{activeQuiz.titlePa}</p>
                         </div>
                         <button
-                          onClick={() => setQuizMode(quizMode === 'practice' ? 'timed' : 'practice')}
+                          onClick={() => {
+                            const nextMode = quizMode === 'practice' ? 'timed' : 'practice';
+                            setQuizMode(nextMode);
+                            startServerQuizSession(activeQuiz.id, nextMode);
+                          }}
                           className={`px-3 py-2 min-h-[40px] rounded-lg border text-xs font-semibold flex items-center gap-1.5 ${subtlePanel}`}
                         >
                           <Clock className="w-3.5 h-3.5" />
@@ -1423,10 +1758,27 @@ export default function App() {
                               ? `Timed (${Math.floor(timeLeftSeconds / 60)}:${String(
                                   timeLeftSeconds % 60
                                 ).padStart(2, '0')})`
-                              : 'Practice Mode'}
+                              : 'Practice Mode (Switch to Timed)'}
                           </span>
                         </button>
                       </div>
+
+                      <div className="text-xs text-slate-400 flex flex-wrap items-center justify-between gap-2">
+                        <span>
+                          Passing Threshold: <strong>{activeQuiz.passingScorePercent || 70}%</strong> · Time Limit: {Math.round((activeQuiz.timeLimitSeconds || 300) / 60)} min
+                        </span>
+                        <span>
+                          {firebaseUser
+                            ? 'Server-Authoritative Grading Active ✓'
+                            : 'Sign in with Google to submit & save official quiz attempts'}
+                        </span>
+                      </div>
+
+                      {quizSubmitError && (
+                        <div className="p-3.5 rounded-xl border border-rose-500/50 bg-rose-500/15 text-xs font-semibold text-rose-200">
+                          {quizSubmitError}
+                        </div>
+                      )}
 
                       <div className="space-y-4">
                         {activeQuestions.map((q, idx) => {
@@ -1489,10 +1841,14 @@ export default function App() {
                                   <div className="font-bold">
                                     {gradedItem.isCorrect
                                       ? '✅ Correct! (ਸਹੀ ਜਵਾਬ)'
-                                      : `❌ Correct Answer: ${q.correctAnswer}`}
+                                      : `❌ Correct Answer: ${gradedItem.correctAnswer}`}
                                   </div>
-                                  <p className="mt-1">{q.explanationPa}</p>
-                                  <p className="text-slate-400 mt-0.5">{q.explanationEn}</p>
+                                  {gradedItem.explanationPa && (
+                                    <p className="mt-1">{gradedItem.explanationPa}</p>
+                                  )}
+                                  {gradedItem.explanationEn && (
+                                    <p className="text-slate-400 mt-0.5">{gradedItem.explanationEn}</p>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -1503,15 +1859,17 @@ export default function App() {
                       <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                         <button
                           onClick={() => handleSubmitQuiz(activeQuiz.id)}
-                          className="w-full sm:w-auto px-6 py-3 min-h-[44px] rounded-xl bg-sky-600 text-white text-sm font-bold"
+                          disabled={quizSubmitting}
+                          className="w-full sm:w-auto px-6 py-3 min-h-[44px] rounded-xl bg-sky-600 text-white text-sm font-bold disabled:opacity-50"
                         >
-                          Submit Answers for Grading
+                          {quizSubmitting ? 'Grading on Server...' : 'Submit Answers for Server Grading'}
                         </button>
 
                         {lastQuizResult && (
                           <div className="text-sm font-bold font-mono">
-                            Score: {lastQuizResult.scorePercent}% ({lastQuizResult.correctCount}/
-                            {lastQuizResult.totalQuestions})
+                            Saved Score: {lastQuizResult.scorePercent}% ({lastQuizResult.correctCount}/
+                            {lastQuizResult.totalQuestions}) ·{' '}
+                            {lastQuizResult.passed ? 'PASSED ✓' : 'BELOW PASSING THRESHOLD'}
                           </div>
                         )}
                       </div>
@@ -1754,154 +2112,191 @@ export default function App() {
             </div>
           )}
 
-          {/* 10. EDITABLE SYLLABUS STUDIO */}
+          {/* 10. SYLLABUS COVERAGE & PROTECTED ADMIN EDITOR */}
           {activeSection === 'admin' && (
             <div className={`p-5 sm:p-6 rounded-xl border space-y-5 ${surfaceCard}`}>
-              <div>
-                <h2 className="text-lg sm:text-xl font-bold">
-                  Editable Syllabus Studio · ਪਾਠਕ੍ਰਮ ਸੰਪਾਦਕ
-                </h2>
-                <p className="text-xs text-slate-400">
-                  Add or customize bilingual lessons, child analogies, and interactive labs
-                </p>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg sm:text-xl font-bold">
+                    Syllabus Coverage & Studio · ਪਾਠਕ੍ਰਮ ਨਿਰੀਖਣ ਅਤੇ ਸੰਪਾਦਕ
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    {isAdmin
+                      ? 'Administrator Access Verified — Add or customize bilingual lessons in Cloud SQL'
+                      : 'Read-Only Syllabus Coverage Inspector — Administrator role required to modify lessons'}
+                  </p>
+                </div>
+                {syllabusCoverage && (
+                  <div className="text-xs font-mono px-3 py-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 text-emerald-400">
+                    Coverage: {syllabusCoverage.completeTopics}/{syllabusCoverage.totalBlueprintTopics} Topics ({syllabusCoverage.coveragePercent}%)
+                  </div>
+                )}
               </div>
 
               {adminStatusMsg && (
-                <div className="p-3.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 text-xs font-semibold text-emerald-400">
+                <div className="p-3.5 rounded-xl border border-sky-500/40 bg-sky-500/10 text-xs font-semibold text-sky-300">
                   {adminStatusMsg}
                 </div>
               )}
 
-              <form onSubmit={handleSaveSyllabusLesson} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold mb-1">Course / Level</label>
-                  <select
-                    value={editCourseId}
-                    onChange={(e) => setEditCourseId(Number(e.target.value))}
-                    className={`w-full px-3 py-2.5 rounded-lg border text-sm ${subtlePanel}`}
-                  >
-                    {courses.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.titleEn}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              {!isAdmin ? (
+                <div className="space-y-4">
+                  <div className="p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-xs space-y-1">
+                    <div className="font-bold text-amber-400 flex items-center gap-1.5">
+                      <Lock className="w-4 h-4" />
+                      <span>Administrator Role Required for Syllabus Editing</span>
+                    </div>
+                    <p className="text-slate-300">
+                      Syllabus editing is restricted to verified administrator accounts on both the frontend and backend (`requireAdmin`). Below is the live 9-Level Syllabus Coverage Audit against `COMPLETE_SYLLABUS_BLUEPRINT`.
+                    </p>
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-bold mb-1">Linked Simulation Lab</label>
-                  <select
-                    value={editLabId}
-                    onChange={(e) => setEditLabId(e.target.value)}
-                    className={`w-full px-3 py-2.5 rounded-lg border text-sm ${subtlePanel}`}
-                  >
-                    <option value="hardware-explorer">Lab A: Computer Hardware Explorer</option>
-                    <option value="cpu-cycle">Lab B: CPU Instruction Cycle</option>
-                    <option value="ram-storage">Lab C: RAM vs Storage Hierarchy</option>
-                    <option value="binary-converter">Lab D: Binary Converter</option>
-                    <option value="logic-gates">Lab E: Logic Gate Laboratory</option>
-                    <option value="network-sim">Lab F: Network Packet Simulator</option>
-                    <option value="algorithm-math-lab">Lab G: Algorithms & CS Math</option>
-                  </select>
+                  {syllabusCoverage?.levels && (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      {syllabusCoverage.levels.map((lvl: any) => (
+                        <div key={lvl.level} className={`p-4 rounded-xl border space-y-1.5 ${subtlePanel}`}>
+                          <div className="text-xs font-bold text-sky-400">{lvl.titleEn}</div>
+                          <div className="text-xs text-amber-400 font-medium">{lvl.titlePa}</div>
+                          <div className="text-xs font-mono text-emerald-400">
+                            Status: {lvl.status.toUpperCase()} ({lvl.coveredTopicsCount}/{lvl.totalTopics} topics · {lvl.authoredLessonCount} lessons)
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
+              ) : (
+                <form onSubmit={handleSaveSyllabusLesson} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Course / Level</label>
+                    <select
+                      value={editCourseId}
+                      onChange={(e) => setEditCourseId(Number(e.target.value))}
+                      className={`w-full px-3 py-2.5 rounded-lg border text-sm ${subtlePanel}`}
+                    >
+                      {courses.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.titleEn}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-bold mb-1">Lesson Title (English)</label>
-                  <input
-                    type="text"
-                    required
-                    value={editTitleEn}
-                    onChange={(e) => setEditTitleEn(e.target.value)}
-                    className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
-                  />
-                </div>
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Linked Simulation Lab</label>
+                    <select
+                      value={editLabId}
+                      onChange={(e) => setEditLabId(e.target.value)}
+                      className={`w-full px-3 py-2.5 rounded-lg border text-sm ${subtlePanel}`}
+                    >
+                      <option value="hardware-explorer">Lab A: Computer Hardware Explorer</option>
+                      <option value="cpu-cycle">Lab B: CPU Instruction Cycle</option>
+                      <option value="ram-storage">Lab C: RAM vs Storage Hierarchy</option>
+                      <option value="binary-converter">Lab D: Binary Converter</option>
+                      <option value="logic-gates">Lab E: Logic Gate Laboratory</option>
+                      <option value="network-sim">Lab F: Network Packet Simulator</option>
+                      <option value="algorithm-math-lab">Lab G: Algorithms & CS Math</option>
+                    </select>
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-bold mb-1">Lesson Title (Punjabi)</label>
-                  <input
-                    type="text"
-                    required
-                    value={editTitlePa}
-                    onChange={(e) => setEditTitlePa(e.target.value)}
-                    className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
-                  />
-                </div>
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Lesson Title (English)</label>
+                    <input
+                      type="text"
+                      required
+                      value={editTitleEn}
+                      onChange={(e) => setEditTitleEn(e.target.value)}
+                      className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
+                    />
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-bold mb-1">Child Analogy (Punjabi)</label>
-                  <textarea
-                    rows={3}
-                    required
-                    value={editAnalogyPa}
-                    onChange={(e) => setEditAnalogyPa(e.target.value)}
-                    className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
-                  />
-                </div>
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Lesson Title (Punjabi)</label>
+                    <input
+                      type="text"
+                      required
+                      value={editTitlePa}
+                      onChange={(e) => setEditTitlePa(e.target.value)}
+                      className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
+                    />
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-bold mb-1">Child Analogy (English)</label>
-                  <textarea
-                    rows={3}
-                    required
-                    value={editAnalogyEn}
-                    onChange={(e) => setEditAnalogyEn(e.target.value)}
-                    className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
-                  />
-                </div>
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Child Analogy (Punjabi)</label>
+                    <textarea
+                      rows={3}
+                      required
+                      value={editAnalogyPa}
+                      onChange={(e) => setEditAnalogyPa(e.target.value)}
+                      className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
+                    />
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-bold mb-1">Technical Explanation (Punjabi)</label>
-                  <textarea
-                    rows={3}
-                    required
-                    value={editTechPa}
-                    onChange={(e) => setEditTechPa(e.target.value)}
-                    className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
-                  />
-                </div>
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Child Analogy (English)</label>
+                    <textarea
+                      rows={3}
+                      required
+                      value={editAnalogyEn}
+                      onChange={(e) => setEditAnalogyEn(e.target.value)}
+                      className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
+                    />
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-bold mb-1">Technical Explanation (English)</label>
-                  <textarea
-                    rows={3}
-                    required
-                    value={editTechEn}
-                    onChange={(e) => setEditTechEn(e.target.value)}
-                    className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
-                  />
-                </div>
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Technical Explanation (Punjabi)</label>
+                    <textarea
+                      rows={3}
+                      required
+                      value={editTechPa}
+                      onChange={(e) => setEditTechPa(e.target.value)}
+                      className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
+                    />
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-bold mb-1">Practical Example (Punjabi)</label>
-                  <textarea
-                    rows={2}
-                    required
-                    value={editExamplePa}
-                    onChange={(e) => setEditExamplePa(e.target.value)}
-                    className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
-                  />
-                </div>
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Technical Explanation (English)</label>
+                    <textarea
+                      rows={3}
+                      required
+                      value={editTechEn}
+                      onChange={(e) => setEditTechEn(e.target.value)}
+                      className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
+                    />
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-bold mb-1">Practical Example (English)</label>
-                  <textarea
-                    rows={2}
-                    required
-                    value={editExampleEn}
-                    onChange={(e) => setEditExampleEn(e.target.value)}
-                    className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
-                  />
-                </div>
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Practical Example (Punjabi)</label>
+                    <textarea
+                      rows={2}
+                      required
+                      value={editExamplePa}
+                      onChange={(e) => setEditExamplePa(e.target.value)}
+                      className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
+                    />
+                  </div>
 
-                <div className="md:col-span-2">
-                  <button
-                    type="submit"
-                    className="w-full sm:w-auto px-6 py-3 min-h-[44px] rounded-xl bg-sky-600 text-white text-xs font-bold"
-                  >
-                    {editLessonId ? 'Save Lesson Updates' : 'Publish New Lesson'}
-                  </button>
-                </div>
-              </form>
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Practical Example (English)</label>
+                    <textarea
+                      rows={2}
+                      required
+                      value={editExampleEn}
+                      onChange={(e) => setEditExampleEn(e.target.value)}
+                      className={`w-full px-3 py-2 rounded-lg border text-sm ${subtlePanel}`}
+                    />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <button
+                      type="submit"
+                      className="w-full sm:w-auto px-6 py-3 min-h-[44px] rounded-xl bg-sky-600 text-white text-xs font-bold"
+                    >
+                      {editLessonId ? 'Save Lesson Updates' : 'Publish New Lesson'}
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
           )}
 
@@ -1914,15 +2309,169 @@ export default function App() {
                     DEVICE PROFILE: iPHONE 15 PRO (393 × 852 pt · Super Retina XDR 120Hz)
                   </div>
                   <h2 className="text-xl font-bold mt-1">
-                    iPhone 15 Pro Full-Screen & Touch Stability Settings
+                    iPhone 15 Pro Full-Screen & Standalone App Setup
                   </h2>
                   <p className="text-xs text-slate-400 mt-1">
-                    Configured to prevent horizontal finger movement, rubber-band shifting, and input auto-zoom while running edge-to-edge around the Dynamic Island.
+                    Open CS Academy directly without Safari navigation bars or AI Studio playgrounds wrapper.
                   </p>
                 </div>
                 <Smartphone className="w-8 h-8 text-sky-500 shrink-0" />
               </div>
 
+              {/* LIVE ENVIRONMENT STATUS INDICATOR */}
+              <div
+                className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                  isStandalonePWA
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                    : isInIframe
+                    ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                    : 'border-sky-500/40 bg-sky-500/10 text-sky-200'
+                }`}
+              >
+                <div className="flex items-start gap-2.5">
+                  {isStandalonePWA ? (
+                    <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                  )}
+                  <div>
+                    <div className="text-xs font-bold uppercase tracking-wider">
+                      {isStandalonePWA
+                        ? 'Standalone Full-Screen Mode Active (No Browser Borders)'
+                        : isInIframe
+                        ? 'Notice: Viewing inside AI Studio Preview Frame'
+                        : 'Viewing in Standard Safari Browser'}
+                    </div>
+                    <div className="text-xs mt-0.5 opacity-90">
+                      {isStandalonePWA
+                        ? 'App is running edge-to-edge around the Dynamic Island with zero Safari borders!'
+                        : isInIframe
+                        ? 'Do not tap Add to Home Screen inside this preview. Click "Open Direct App in Safari" below first!'
+                        : 'Tap the Safari Share button below and select "Add to Home Screen" to install.'}
+                    </div>
+                  </div>
+                </div>
+
+                {!isStandalonePWA && (
+                  <a
+                    href={directAppUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full sm:w-auto px-4 py-2 min-h-[40px] rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold shrink-0 flex items-center justify-center gap-1.5"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Open Direct App in Safari ↗</span>
+                  </a>
+                )}
+              </div>
+
+              {/* CRITICAL EXPLANATION: WHY AI STUDIO PLAYGROUND OPENED */}
+              <div className="p-5 rounded-xl border border-amber-500/40 bg-amber-500/10 space-y-3">
+                <div className="flex items-center gap-2 text-amber-400 font-bold text-sm">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>
+                    ਸਮੱਸਿਆ ਦਾ ਹੱਲ: ਕਿਉਂ AI Studio Playground ਖੁੱਲ੍ਹਿਆ ਸੀ? (Why AI Studio Opened Instead of App)
+                  </span>
+                </div>
+                <div className="text-xs text-slate-200 space-y-2 leading-relaxed">
+                  <p>
+                    <strong>English:</strong> When viewing an app inside Google AI Studio Build, the URL in Safari is <code className="text-amber-300 font-mono">aistudio.google.com</code>. If you tap <em>"Add to Home Screen"</em> on that page, iOS saves the AI Studio editor website.
+                  </p>
+                  <p>
+                    <strong>ਪੰਜਾਬੀ:</strong> ਜਦੋਂ ਤੁਸੀਂ AI Studio Build ਵਿੱਚੋਂ 'Add to Home Screen' ਕਰਦੇ ਹੋ, ਤਾਂ iPhone ਸਾਰੀ AI Studio ਵੈੱਬਸਾਈਟ ਨੂੰ ਸੇਵ ਕਰਦਾ ਹੈ। ਅਸਲ CS Academy ਐਪ ਨੂੰ <strong>100% Full Screen ਬਿਨਾਂ ਕਿਸੇ ਬ੍ਰਾਊਜ਼ਰ ਬਾਰ ਦੇ</strong> ਚਲਾਉਣ ਲਈ ਹੇਠਾਂ ਦਿੱਤੇ ਬਟਨ ਰਾਹੀਂ ਐਪ ਦਾ <strong>Direct Link</strong> ਸਫਾਰੀ ਵਿੱਚ ਖੋਲ੍ਹੋ।
+                  </p>
+                </div>
+
+                <div className="pt-2 flex flex-wrap items-center gap-2.5">
+                  <a
+                    href={directAppUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-4 py-2.5 min-h-[44px] rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold flex items-center gap-2 shadow-md"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                    <span>Open Direct App in Safari ↗</span>
+                  </a>
+                  <button
+                    onClick={handleCopyDirectUrl}
+                    className={`px-4 py-2.5 min-h-[44px] rounded-xl border text-xs font-bold flex items-center gap-2 ${
+                      copiedUrl
+                        ? 'bg-emerald-600 border-emerald-500 text-white'
+                        : 'border-slate-600 bg-slate-800 text-slate-200'
+                    }`}
+                  >
+                    {copiedUrl ? (
+                      <>
+                        <Check className="w-4 h-4 text-white" />
+                        <span>Copied Direct URL ✓</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-4 h-4" />
+                        <span>Copy Direct URL</span>
+                      </>
+                    )}
+                  </button>
+                  <span className="text-[11px] text-sky-400 font-mono select-all truncate max-w-xs bg-slate-900/80 px-2.5 py-1 rounded border border-slate-700">
+                    {directAppUrl}
+                  </span>
+                </div>
+              </div>
+
+              {/* STEP-BY-STEP INSTALLATION GUIDE */}
+              <div className="p-5 rounded-xl border border-sky-500/30 bg-sky-500/10 space-y-3">
+                <div className="text-sm font-bold flex items-center gap-2 text-sky-400">
+                  <Share className="w-4 h-4" />
+                  <span>
+                    How to Run 100% Edge-to-Edge Full Screen (No Safari Bar, No AI Studio UI):
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+                  <div className={`p-3.5 rounded-xl border space-y-1.5 ${subtlePanel}`}>
+                    <div className="w-6 h-6 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-xs">
+                      1
+                    </div>
+                    <div className="font-bold">Open Direct Link</div>
+                    <p className="text-slate-400 text-[11px]">
+                      Open the Direct App URL in <strong>Safari</strong> on your iPhone 15 Pro.
+                    </p>
+                  </div>
+
+                  <div className={`p-3.5 rounded-xl border space-y-1.5 ${subtlePanel}`}>
+                    <div className="w-6 h-6 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-xs">
+                      2
+                    </div>
+                    <div className="font-bold flex items-center gap-1">
+                      <span>Tap Share (📤)</span>
+                    </div>
+                    <p className="text-slate-400 text-[11px]">
+                      At the bottom of Safari, tap the <strong>Share</strong> button (box with arrow up).
+                    </p>
+                  </div>
+
+                  <div className={`p-3.5 rounded-xl border space-y-1.5 ${subtlePanel}`}>
+                    <div className="w-6 h-6 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-xs">
+                      3
+                    </div>
+                    <div className="font-bold">Add to Home Screen</div>
+                    <p className="text-slate-400 text-[11px]">
+                      Tap <strong>"Add to Home Screen" (ਹੋਮ ਸਕ੍ਰੀਨ ਤੇ ਜੋੜੋ)</strong> and tap <strong>Add</strong>.
+                    </p>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 space-y-1.5">
+                    <div className="w-6 h-6 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center text-xs">
+                      ✓
+                    </div>
+                    <div className="font-bold text-white">Full Screen Ready</div>
+                    <p className="text-[11px] text-emerald-200/90">
+                      Tap the icon on your iPhone home screen! It opens 100% full screen with zero borders!
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* HARDWARE STABILITY & TOUCH CONTROLS */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* 1. Touch & Horizontal Movement Lock */}
                 <div className={`p-4 rounded-xl border flex items-center justify-between gap-3 ${subtlePanel}`}>
@@ -1991,7 +2540,7 @@ export default function App() {
                 {/* 4. Native Fullscreen Toggle */}
                 <div className={`p-4 rounded-xl border flex items-center justify-between gap-3 ${subtlePanel}`}>
                   <div>
-                    <div className="text-sm font-bold"> Full-Screen Viewport Mode</div>
+                    <div className="text-sm font-bold">Full-Screen Viewport Mode</div>
                     <p className="text-xs text-slate-400 mt-1">
                       {isStandalonePWA
                         ? 'Running in native iOS Standalone Full-Screen mode!'
@@ -2006,32 +2555,168 @@ export default function App() {
                   </button>
                 </div>
               </div>
-
-              {/* iOS Safari Full-Screen Standalone Guide for iPhone 15 Pro */}
-              <div className="p-5 rounded-xl border border-sky-500/40 bg-sky-500/10 space-y-2">
-                <div className="text-sm font-bold flex items-center gap-2 text-sky-400">
-                  <Share className="w-4 h-4" />
-                  <span>How to Run 100% Edge-to-Edge Full Screen on iPhone 15 Pro (No Safari Bar):</span>
-                </div>
-                <ol className="text-xs space-y-1.5 list-decimal list-inside text-slate-200">
-                  <li>
-                    Open this app URL in <strong>Safari</strong> on your iPhone 15 Pro.
-                  </li>
-                  <li>
-                    Tap the <strong>Share</strong> button at the bottom of Safari.
-                  </li>
-                  <li>
-                    Tap <strong>Add to Home Screen (ਹੋਮ ਸਕ੍ਰੀਨ ਤੇ ਜੋੜੋ)</strong> and tap <strong>Add</strong>.
-                  </li>
-                  <li>
-                    Launch <strong>CS Academy</strong> from your Home Screen — it runs in 100% locked native Full-Screen mode with zero browser bars!
-                  </li>
-                </ol>
-              </div>
             </div>
           )}
         </div>
       </main>
+
+      {/* IPHONE FULL-SCREEN SETUP MODAL */}
+      {showIphoneModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+        >
+          <div
+            className={`w-full max-w-lg rounded-2xl border p-5 sm:p-6 space-y-4 shadow-2xl max-h-[90dvh] overflow-y-auto ${surfaceCard}`}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-slate-500/20 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-sky-500/10 border border-sky-500/30 text-sky-400">
+                  <Smartphone className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base sm:text-lg font-bold">
+                    iPhone 15 Pro Standalone Full-Screen Setup
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Run 100% borderless with zero Safari bars & zero AI Studio wrappers
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowIphoneModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Why AI Studio opened explanation */}
+            <div className="p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/10 space-y-1.5 text-xs">
+              <div className="font-bold flex items-center gap-1.5 text-amber-400">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>ਕਿਉਂ AI Studio Playground ਖੁੱਲ੍ਹਿਆ ਸੀ? (Why AI Studio Opened)</span>
+              </div>
+              <p className="text-slate-300 leading-relaxed">
+                When you tap "Add to Home Screen" inside AI Studio Build, Safari bookmarks the Google AI Studio playground website instead of the standalone CS Academy application.
+              </p>
+              <p className="text-amber-200/90 font-medium leading-relaxed">
+                ਬਿਨਾਂ ਬ੍ਰਾਊਜ਼ਰ ਬਾਰ ਅਤੇ ਬਿਨਾਂ AI Studio ਦੇ Full Screen ਚਲਾਉਣ ਲਈ, ਤੁਹਾਨੂੰ ਹੇਠਾਂ ਦਿੱਤਾ <strong>Direct App URL</strong> ਸਫਾਰੀ ਵਿੱਚ ਖੋਲ੍ਹਣਾ ਪਵੇਗਾ।
+              </p>
+            </div>
+
+            {/* 1-Tap Action Buttons */}
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-slate-400">Direct Standalone App Link:</div>
+              <div className="flex items-center gap-2">
+                <a
+                  href={directAppUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 py-3 px-4 min-h-[46px] rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  <span>1. Open Direct App in Safari ↗</span>
+                </a>
+                <button
+                  onClick={handleCopyDirectUrl}
+                  className={`py-3 px-4 min-h-[46px] rounded-xl border font-bold text-xs flex items-center justify-center gap-1.5 shrink-0 ${
+                    copiedUrl
+                      ? 'bg-emerald-600 border-emerald-500 text-white'
+                      : 'border-slate-600 bg-slate-800 hover:bg-slate-700 text-slate-200'
+                  }`}
+                >
+                  {copiedUrl ? (
+                    <>
+                      <Check className="w-4 h-4 text-white" />
+                      <span>Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-4 h-4" />
+                      <span>Copy URL</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              <div className="p-2.5 rounded-xl border border-slate-700 bg-slate-900/90 flex items-center justify-between gap-2 text-xs font-mono text-sky-400">
+                <span className="truncate select-all">{directAppUrl}</span>
+                <span className="text-[10px] text-emerald-400 font-sans font-semibold shrink-0">
+                  Verified Live URL
+                </span>
+              </div>
+            </div>
+
+            {/* Visual Step-by-Step Instructions */}
+            <div className="space-y-2.5 pt-2">
+              <div className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                Simple 3-Step Setup (ਹੋਮ ਸਕ੍ਰੀਨ 'ਤੇ ਜੋੜਨ ਦੇ ਆਸਾਨ ਕਦਮ):
+              </div>
+              <div className="space-y-2 text-xs">
+                <div className={`p-3 rounded-xl border flex items-start gap-3 ${subtlePanel}`}>
+                  <div className="w-6 h-6 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-xs shrink-0 mt-0.5">
+                    1
+                  </div>
+                  <div>
+                    <div className="font-bold">Open Direct App in Safari</div>
+                    <p className="text-slate-400 mt-0.5">
+                      Tap the blue button above to open the deployed app URL directly in Safari (or paste it into Safari's address bar).
+                    </p>
+                  </div>
+                </div>
+
+                <div className={`p-3 rounded-xl border flex items-start gap-3 ${subtlePanel}`}>
+                  <div className="w-6 h-6 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-xs shrink-0 mt-0.5">
+                    2
+                  </div>
+                  <div>
+                    <div className="font-bold flex items-center gap-1.5">
+                      <span>Tap Safari Share Button</span>
+                      <Share className="w-3.5 h-3.5 text-sky-400" />
+                    </div>
+                    <p className="text-slate-400 mt-0.5">
+                      At the bottom bar of Safari, tap the Share icon (square with an arrow pointing up 📤).
+                    </p>
+                  </div>
+                </div>
+
+                <div className={`p-3 rounded-xl border flex items-start gap-3 ${subtlePanel}`}>
+                  <div className="w-6 h-6 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-xs shrink-0 mt-0.5">
+                    3
+                  </div>
+                  <div>
+                    <div className="font-bold">
+                      Tap "Add to Home Screen" · ਹੋਮ ਸਕ੍ਰੀਨ ਤੇ ਜੋੜੋ
+                    </div>
+                    <p className="text-slate-400 mt-0.5">
+                      Scroll down in the Share sheet, tap <strong>Add to Home Screen</strong>, and tap <strong>Add</strong> at the top right.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 flex items-start gap-3 text-emerald-300">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-bold text-white">Done! Pure Full Screen Native Experience</div>
+                    <p className="text-xs text-emerald-200/90 mt-0.5">
+                      Now tap the <strong>CS Academy</strong> icon on your iPhone home screen! It opens 100% full screen with zero browser address bars, zero bottom borders, and NO AI Studio playgrounds!
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowIphoneModal(false)}
+              className="w-full py-2.5 min-h-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* MOBILE-FIRST IPHONE 15 PRO THUMB NAVIGATION BAR (Anchored at bottom of flex shell, respects Home Indicator) */}
       <nav

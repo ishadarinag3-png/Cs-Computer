@@ -58,17 +58,21 @@ export const courses = pgTable('courses', {
 });
 
 // 4. Modules Table
-export const modules = pgTable('modules', {
-  id: serial('id').primaryKey(),
-  courseId: integer('course_id')
-    .references(() => courses.id, { onDelete: 'cascade' })
-    .notNull(),
-  orderIndex: integer('order_index').notNull().default(1),
-  titleEn: text('title_en').notNull(),
-  titlePa: text('title_pa').notNull(),
-  summaryEn: text('summary_en').notNull().default(''),
-  summaryPa: text('summary_pa').notNull().default(''),
-});
+export const modules = pgTable(
+  'modules',
+  {
+    id: serial('id').primaryKey(),
+    courseId: integer('course_id')
+      .references(() => courses.id, { onDelete: 'cascade' })
+      .notNull(),
+    orderIndex: integer('order_index').notNull().default(1),
+    titleEn: text('title_en').notNull(),
+    titlePa: text('title_pa').notNull(),
+    summaryEn: text('summary_en').notNull().default(''),
+    summaryPa: text('summary_pa').notNull().default(''),
+  },
+  (table) => [uniqueIndex('course_module_order_unique_idx').on(table.courseId, table.orderIndex)]
+);
 
 // 5. Lessons Table (Full Bilingual Content, Child Analogy, Technical Breakdown, Code/Assembly Demo, Quiz)
 export const lessons = pgTable('lessons', {
@@ -145,31 +149,54 @@ export const lessonProgress = pgTable(
 );
 
 // 8. Quizzes Table
-export const quizzes = pgTable('quizzes', {
-  id: serial('id').primaryKey(),
-  lessonId: integer('lesson_id')
-    .references(() => lessons.id, { onDelete: 'cascade' })
-    .notNull(),
-  titleEn: text('title_en').notNull(),
-  titlePa: text('title_pa').notNull(),
-  timeLimitSeconds: integer('time_limit_seconds').notNull().default(300),
-  passingScorePercent: integer('passing_score_percent').notNull().default(70),
-});
+export const quizzes = pgTable(
+  'quizzes',
+  {
+    id: serial('id').primaryKey(),
+    lessonId: integer('lesson_id')
+      .references(() => lessons.id, { onDelete: 'cascade' })
+      .notNull(),
+    titleEn: text('title_en').notNull(),
+    titlePa: text('title_pa').notNull(),
+    timeLimitSeconds: integer('time_limit_seconds').notNull().default(300),
+    passingScorePercent: integer('passing_score_percent').notNull().default(70),
+  },
+  (table) => [uniqueIndex('quiz_lesson_unique_idx').on(table.lessonId)]
+);
 
 // 9. Quiz Questions Table (Supports Multiple Choice, True/False, Fill in the Blank)
-export const questions = pgTable('questions', {
+export const questions = pgTable(
+  'questions',
+  {
+    id: serial('id').primaryKey(),
+    quizId: integer('quiz_id')
+      .references(() => quizzes.id, { onDelete: 'cascade' })
+      .notNull(),
+    questionType: text('question_type').notNull().default('mcq'), // 'mcq' | 'true_false' | 'fill_blank'
+    topicTag: text('topic_tag').notNull().default('Fundamentals'),
+    promptEn: text('prompt_en').notNull(),
+    promptPa: text('prompt_pa').notNull(),
+    optionsJson: jsonb('options_json').$type<string[]>().notNull().default([]),
+    correctAnswer: text('correct_answer').notNull(),
+    explanationEn: text('explanation_en').notNull(),
+    explanationPa: text('explanation_pa').notNull(),
+  },
+  (table) => [uniqueIndex('question_quiz_prompt_unique_idx').on(table.quizId, table.promptEn)]
+);
+
+// 9b. Quiz Sessions Table (Server-enforced deadlines and single-submission tracking)
+export const quizSessions = pgTable('quiz_sessions', {
   id: serial('id').primaryKey(),
+  userUid: text('user_uid')
+    .references(() => users.uid, { onDelete: 'cascade' })
+    .notNull(),
   quizId: integer('quiz_id')
     .references(() => quizzes.id, { onDelete: 'cascade' })
     .notNull(),
-  questionType: text('question_type').notNull().default('mcq'), // 'mcq' | 'true_false' | 'fill_blank'
-  topicTag: text('topic_tag').notNull().default('Fundamentals'),
-  promptEn: text('prompt_en').notNull(),
-  promptPa: text('prompt_pa').notNull(),
-  optionsJson: jsonb('options_json').$type<string[]>().notNull().default([]),
-  correctAnswer: text('correct_answer').notNull(),
-  explanationEn: text('explanation_en').notNull(),
-  explanationPa: text('explanation_pa').notNull(),
+  mode: text('mode').notNull().default('practice'), // 'practice' | 'timed'
+  startedAt: timestamp('started_at').defaultNow().notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  submittedAt: timestamp('submitted_at'),
 });
 
 // 10. Quiz Attempts Table
@@ -186,8 +213,19 @@ export const quizAttempts = pgTable('quiz_attempts', {
   totalQuestions: integer('total_questions').notNull(),
   passed: boolean('passed').notNull(),
   mode: text('mode').notNull().default('practice'), // 'practice' | 'timed'
+  timeTakenSeconds: integer('time_taken_seconds').notNull().default(0),
   answersJson: jsonb('answers_json')
-    .$type<Array<{ questionId: number; submitted: string; isCorrect: boolean; topicTag: string }>>()
+    .$type<
+      Array<{
+        questionId: number;
+        submitted: string;
+        isCorrect: boolean;
+        topicTag: string;
+        correctAnswer?: string;
+        explanationEn?: string;
+        explanationPa?: string;
+      }>
+    >()
     .notNull()
     .default([]),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -210,17 +248,21 @@ export const bookmarks = pgTable(
 );
 
 // 12. Personal Notes Table
-export const notes = pgTable('notes', {
-  id: serial('id').primaryKey(),
-  userUid: text('user_uid')
-    .references(() => users.uid, { onDelete: 'cascade' })
-    .notNull(),
-  lessonId: integer('lesson_id')
-    .references(() => lessons.id, { onDelete: 'cascade' })
-    .notNull(),
-  content: text('content').notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+export const notes = pgTable(
+  'notes',
+  {
+    id: serial('id').primaryKey(),
+    userUid: text('user_uid')
+      .references(() => users.uid, { onDelete: 'cascade' })
+      .notNull(),
+    lessonId: integer('lesson_id')
+      .references(() => lessons.id, { onDelete: 'cascade' })
+      .notNull(),
+    content: text('content').notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex('user_note_lesson_unique_idx').on(table.userUid, table.lessonId)]
+);
 
 // 13. Achievements Catalog Table
 export const achievements = pgTable('achievements', {
