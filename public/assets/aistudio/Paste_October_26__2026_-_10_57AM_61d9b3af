@@ -1,0 +1,866 @@
+MASTER PROJECT DIRECTIVE
+
+COMPUTER FUNDAMENTALS & ELECTRONICS ENGINEERING ACADEMY
+
+Security Remediation, Full-Stack Reliability, Deep Bilingual Curriculum and Advanced Learning Improvements
+
+Act as a principal full-stack engineer, cybersecurity engineer, database engineer, electronics engineer, computer science educator, Punjabi technical educator, curriculum designer, simulation engineer, QA engineer and DevOps engineer.
+
+Your task is to inspect, improve, repair and expand the EXISTING Computer Fundamentals & Electronics Engineering Academy repository.
+
+This is an implementation task, not merely an analysis or planning task.
+
+You must modify the actual existing source files, add complete educational content, correct defects, create or improve tests, run available verification commands, and report the genuine completion status.
+
+Do not recreate the entire application from scratch.
+Do not remove existing working features.
+Do not replace real functionality with mock implementations.
+Do not generate only a new UI.
+Do not claim completion because a file, component, lesson title or endpoint exists.
+
+Preserve the current technology stack wherever practical, and make only necessary, documented changes.
+
+==================================================
+PHASE 1 — INSPECT THE ENTIRE EXISTING REPOSITORY
+
+Inspect the frontend, backend, database, authentication, curriculum, lesson reader, quizzes, AI tutor, laboratory components, task manager, seed data, migrations, configuration, tests and deployment documentation.
+
+Identify the actual files and functions responsible for:
+
+1. Administrator authorization.
+2. Authentication and token validation.
+3. AI Tutor request handling and quotas.
+4. Public curriculum APIs.
+5. Quiz creation and grading.
+6. Quiz sessions and expiration.
+7. Learning progress and XP.
+8. Database configuration.
+9. Database initialization and migration tracking.
+10. Curriculum seeding and updating.
+11. Course enrollment and prerequisites.
+12. Lesson links and laboratory routing.
+13. Study-time tracking and streaks.
+14. Curriculum coverage metrics.
+15. Frontend/backend production builds.
+16. Educational content storage and rendering.
+17. Punjabi and English translations.
+18. Automated tests.
+
+Produce a defect register with severity, file locations, root cause, proposed correction and verification method.
+
+Then begin fixing the defects in dependency order.
+
+Do not stop after producing the defect register.
+
+==================================================
+PHASE 2 — FIX ALL PREVIOUSLY IDENTIFIED DEFECTS
+
+A. AI Tutor daily quota
+
+Inspect the implementation of countRecentUserTutorMessages() and the /api/ai/tutor route in server.ts.
+
+Correct the interval calculation so a daily quota actually covers the preceding 24 hours.
+
+Do not confuse milliseconds, seconds, minutes and hours.
+
+Implement:
+
+* A correctly calculated rolling 24-hour usage interval.
+* A defined quota policy.
+* Atomic usage reservation or an equivalent concurrency-safe limit.
+* Per-user rate limits.
+* Per-IP rate limits using trustworthy client identification.
+* Request body and context-size limits.
+* AI model request timeouts.
+* Safe error handling.
+* Usage monitoring.
+* Protection against concurrent quota bypass.
+* Explicit behavior when quota storage or the database fails.
+
+Database failures must not silently reset usage limits to zero.
+
+Use a shared rate-limit store where required for multi-instance deployment. Configure trusted proxies explicitly rather than trusting arbitrary X-Forwarded-For values.
+
+Test requests immediately before and after quota boundaries and test multiple simultaneous requests.
+
+B. Administrator security
+
+Remove hard-coded personal administrator identities and email-substring-based role assignment.
+
+Implement a clearly documented, securely configured administrator allowlist or trusted identity-provider custom claims.
+
+Require a genuinely verified email claim when email verification is part of the authorization policy.
+
+Implement reusable server-side authorization middleware, such as:
+
+requireAuth
+
+requireRole("admin")
+
+Protect every administrative write operation, including lesson editing, question editing, course publication, user-role modification and administrative analytics.
+
+Enforce authorization on the server. Hiding a button is not security.
+
+Ensure that students cannot escalate privileges by modifying profile data or submitting arbitrary role values.
+
+Test unauthenticated, ordinary-user, instructor and administrator scenarios.
+
+C. Quiz integrity and timing
+
+Inspect the quiz frontend and backend.
+
+Correct the mismatch between the response structure and frontend timer initialization. If the API returns timeLimitSeconds within data.session, read it from that exact location.
+
+Use a server-controlled expiry timestamp as the authority.
+
+Implement:
+
+* Quiz session creation.
+* Session ownership verification.
+* Session-mode verification.
+* Server-controlled start and expiry times.
+* One authoritative grading endpoint.
+* Single-use submission enforcement.
+* Expiry handling.
+* A documented auto-submit or reject-after-expiry policy.
+* Prevention of repeated and concurrent submissions.
+* Correct passing-score configuration.
+* Correct answer sanitization in public payloads.
+* Feedback returned after eligible grading.
+* Persistent attempt history.
+
+Validate that the submitted quiz mode matches the stored session mode.
+
+Do not trust the client’s clock, score, correct answers, XP, completion status or elapsed time.
+
+Use a database transaction or equivalent atomic operation to protect quiz submission and prevent duplicate rewards.
+
+When the quiz expires, disable answer changes and submission controls appropriately, and display a clear message.
+
+If the network fails, distinguish an unsaved result from a successfully recorded attempt.
+
+D. XP, achievements and progress integrity
+
+Make lesson completion and rewards idempotent.
+
+Use database transactions, unique constraints or equivalent concurrency-safe operations to prevent duplicate lesson-completion XP.
+
+Implement a clear quiz reward policy that does not allow unlimited reward farming.
+
+Validate lesson existence, publication status, user identity, elapsed time and completion criteria before recording progress.
+
+Do not award XP merely because a frontend sends a completion request.
+
+E. Database configuration and deployment
+
+Resolve the mismatch between DATABASE_URL in documentation and the actual database initialization code.
+
+Choose one documented configuration strategy or implement a clear, tested compatibility layer.
+
+Validate required environment variables at startup and produce safe, actionable configuration errors.
+
+Correct the production build and start commands.
+
+Compile the backend into a supported production format, or use a deliberately configured TypeScript runtime that is installed in the production environment.
+
+Make the frontend and backend builds explicit and reproducible.
+
+Ensure the production start command actually starts the expected compiled application.
+
+Use the deployment environment’s PORT variable.
+
+F. Database migrations and seeding
+
+Implement reliable, version-controlled database migrations with a migration history or another explicit mechanism that detects missing tables, columns, indexes and constraints.
+
+Do not rely only on checking whether tables exist.
+
+Create clearly documented commands for:
+
+* Database migration.
+* Initial database setup.
+* Curriculum seeding.
+* Safe content updates.
+* Development startup.
+* Production builds.
+
+Make seeding idempotent, recoverable and safe under concurrent requests.
+
+If seeding partially fails, the next run must safely reconcile the missing records.
+
+Do not skip content updates merely because the expected number of rows already exists.
+
+Preserve user-generated notes, progress, quiz attempts and saved circuits during curriculum updates.
+
+Use stable IDs, unique slugs and versioned content.
+
+Test initialization against an empty database and an existing populated database.
+
+G. Course enrollment and prerequisites
+
+Implement the missing enrollment functionality.
+
+Provide an appropriate authenticated endpoint for enrolling in a course, if the existing API does not already support it.
+
+Validate course publication and enrollment rules.
+
+Implement prerequisite relationships between courses, modules and lessons.
+
+Allow explicitly designated preview lessons where appropriate.
+
+Display a clear explanation when a lesson is locked by an unmet prerequisite.
+
+Never rely solely on the frontend to enforce course access rules.
+
+H. Broken lesson links and laboratory identifiers
+
+Audit every internal lesson link, task reference, prerequisite reference and laboratory ID.
+
+Compare all IDs against actual implemented records and registered laboratory components.
+
+Correct references to nonexistent lesson slugs.
+
+Correct mismatched laboratory names, including references such as:
+
+* resistor-calc
+* transistor-switch
+* multimeter-lab
+* binary-logic
+* lab-power-rail-short-finder
+* lab-pad-trace-repair-simulator
+
+Implement missing laboratories or map the references to existing compatible laboratories.
+
+Never silently cast an arbitrary string into a laboratory identifier.
+
+Validate identifiers before navigation and provide a helpful fallback when content is unavailable.
+
+Create an automated test that resolves every internal course, lesson, task, prerequisite and laboratory link.
+
+I. Study-time tracking and streaks
+
+Remove hard-coded claims of measured study time, including fixed values such as 15 minutes per completed lesson.
+
+Implement an honest activity-tracking model.
+
+Distinguish:
+
+* Time spent with a lesson open.
+* Time spent actively interacting.
+* Time estimated by the application.
+* Completion events.
+* Calendar-day study activity.
+
+Implement streak calculation based on recorded dates and an explicitly defined timezone policy.
+
+Do not fabricate streaks, achievements, XP or learner history.
+
+Reset user-specific frontend state when accounts change or sign out.
+
+Avoid carrying one user’s private notes, progress, profile or achievements into another account’s session.
+
+J. Health checks, security and runtime monitoring
+
+Improve readiness checks so they distinguish:
+
+* Application process availability.
+* Database connectivity.
+* Required schema readiness.
+* Curriculum availability.
+* Optional external AI service availability.
+
+Sanitize public error messages and avoid logging passwords, identity tokens, API keys or private learning content unnecessarily.
+
+Keep secrets server-side.
+
+Test authorization, cross-user data isolation, validation failures and database outages.
+
+==================================================
+PHASE 3 — REBUILD THE CURRICULUM COVERAGE AUDIT
+
+The curriculum currently maps many subject areas to a relatively small number of lesson records.
+
+Do not confuse a topic-to-lesson mapping with actual instructional coverage.
+
+Audit the complete curriculum blueprint and all authored content.
+
+Every required topic must map to a lesson and to specific lesson sections that genuinely teach that topic.
+
+For each topic, track:
+
+* Topic ID.
+* Topic name.
+* Parent subject.
+* Assigned lesson.
+* Assigned section.
+* Punjabi content completeness.
+* English content completeness.
+* Mathematical explanation completeness.
+* Worked-example completeness.
+* Practical exercise completeness.
+* Assessment completeness.
+* Technical review status.
+* Publication status.
+
+Use these states:
+
+1. Not started.
+2. Outline only.
+3. Partially authored.
+4. Authored in Punjabi.
+5. Authored in English.
+6. Authored bilingually.
+7. Technically reviewed.
+8. Published and verified.
+
+Do not mark a topic complete because a slug exists.
+
+Do not mark bilingual content complete because only its title, definition or introduction is translated.
+
+Replace misleading 100% completeness claims with accurate metrics for mapping, substantive content, translation, assessment and technical review.
+
+Generate a report showing exactly which topics are incomplete and what each topic still requires.
+
+==================================================
+PHASE 4 — EXPAND EVERY SUBTOPIC INTO REAL TEACHING MATERIAL
+
+This is one of the highest-priority tasks.
+
+Expand the existing lesson structure into detailed, progressively organized instructional content.
+
+Do not merely expand lesson titles or add long introductory paragraphs.
+
+Each important subtopic must be taught in its own identifiable section, with a logical sequence of explanations, formulas, examples, applications and exercises.
+
+For complex subjects, split the content into multiple lessons.
+
+A lesson may contain multiple related subtopics, but every subtopic must be developed sufficiently for independent study.
+
+Mandatory lesson architecture
+
+Each complete lesson must contain:
+
+1. Lesson title.
+2. Course and module.
+3. Difficulty level.
+4. Prerequisites.
+5. Learning objectives.
+6. Assumed prior knowledge.
+7. Mathematical prerequisites.
+8. Introduction and motivation.
+9. Conceptual foundations.
+10. Detailed Punjabi explanation in Gurmukhi.
+11. English technical terminology.
+12. Detailed English explanation.
+13. Formal technical explanation.
+14. Relevant laws, principles and equations.
+15. Step-by-step derivations.
+16. At least three fully worked examples for ordinary lessons.
+17. At least five fully worked examples for mathematically intensive lessons.
+18. Practical applications.
+19. Diagrams or circuit illustrations where appropriate.
+20. Comparison tables where useful.
+21. Common misconceptions.
+22. Common mistakes and their correction.
+23. Practical exercises.
+24. Assessment questions.
+25. Answer explanations.
+26. Lesson summary.
+27. Key terminology.
+28. Related lessons and prerequisites.
+29. Further reading or authoritative references when useful.
+
+The exact amount of material should be appropriate to the complexity of the topic. These minimums must not become an excuse for repetitive or superficial content.
+
+Mandatory structure inside every important subtopic
+
+A. Definition
+
+Provide a precise definition in Punjabi and English.
+
+Explain what the concept means, where it applies and why it matters.
+
+B. Intuitive explanation
+
+Explain the idea in simple Punjabi using familiar examples.
+
+Avoid unexplained jargon.
+
+C. Technical explanation
+
+Explain the physical principle, mathematical relationship, operating mechanism or computational process.
+
+Preserve the correct technical terminology.
+
+D. Formula and derivation
+
+Where relevant, state the formula, define every symbol, give its units and show how it is derived or justified.
+
+Explain when the formula applies and its limitations.
+
+Do not invent formulas for concepts that do not require them.
+
+E. Fully worked examples
+
+Show known quantities, unknown quantities, formula selection, unit conversion, substitution, intermediate steps, result and reasonableness check.
+
+Explain the physical or computational meaning of the result.
+
+F. Practical connection
+
+Connect theory to actual devices, circuits, software, measurements, repairs or engineering design.
+
+G. Typical errors
+
+Explain common conceptual mistakes, incorrect calculations, misleading assumptions and practical failure modes.
+
+H. Exercises and mastery checks
+
+Include introductory, intermediate and advanced exercises where appropriate.
+
+Provide solutions and explanations in the appropriate assessment context.
+
+I. Connections to other topics
+
+Identify what the learner should know beforehand and how the subtopic connects to later lessons.
+
+Bilingual content rules
+
+Punjabi must be written in Gurmukhi script.
+
+For example:
+
+“Voltage divider (ਵੋਲਟੇਜ ਡਿਵਾਈਡਰ) ਦੋ ਜਾਂ ਵੱਧ series resistors ਦੀ ਮਦਦ ਨਾਲ input voltage ਦਾ ਇੱਕ ਹਿੱਸਾ ਪ੍ਰਾਪਤ ਕਰਨ ਵਾਲਾ circuit ਹੈ।”
+
+Teach all essential concepts in both languages.
+
+Keep technical expressions such as Voltage, Current, Resistance, Capacitance, Inductance, Transistor, MOSFET, ADC, GPIO and PWM available in English alongside the Punjabi explanations.
+
+Provide a language selector supporting:
+
+* Punjabi.
+* English.
+* Punjabi and English side by side.
+
+Maintain equivalent depth across languages. Do not allow a complete English lesson to be paired with a two-sentence Punjabi translation.
+
+Mathematical teaching rules
+
+Always state:
+
+1. Given values.
+2. Required unknown.
+3. Governing formula.
+4. Meaning of every variable.
+5. Appropriate unit conversion.
+6. Substitution.
+7. Intermediate calculations.
+8. Final result.
+9. Unit.
+10. Physical or mathematical interpretation.
+11. Reasonableness check.
+12. Relevant assumptions.
+
+Use rendered mathematical notation supported by the existing application.
+
+Avoid malformed LaTeX and unescaped characters.
+
+Verify every numerical result before publishing it.
+
+==================================================
+PHASE 5 — EXPAND ALL COMPUTER FUNDAMENTALS CONTENT
+
+Use the existing computer fundamentals syllabus as the authoritative coverage list.
+
+Expand every listed topic within these areas:
+
+1. Mathematics and logical foundations for computing.
+2. Computer introduction and history.
+3. Computer hardware.
+4. CPU architecture and instruction execution.
+5. RAM, cache and storage.
+6. Number systems and binary arithmetic.
+7. Boolean algebra and digital logic.
+8. Operating systems.
+9. Software and programming fundamentals.
+10. Data structures and algorithms.
+11. Filesystems and memory management.
+12. Databases and APIs.
+13. Networking and the Internet.
+14. Cybersecurity.
+15. Computer architecture and performance.
+16. Microcontrollers and embedded computers.
+17. Cloud computing and virtualization.
+18. Artificial intelligence fundamentals.
+19. Computer troubleshooting.
+20. Advanced computer engineering concepts.
+
+Every topic in the existing syllabus must receive a meaningful place in the final curriculum.
+
+Do not merge dozens of unrelated topics into one short lesson simply to reduce the number of lesson records.
+
+For instance, teach the CPU instruction cycle separately from cache coherence, the OSI model separately from subnetting, and Boolean algebra separately from sequential logic when their learning objectives require separate instruction.
+
+==================================================
+PHASE 6 — EXPAND ALL ELECTRONICS ENGINEERING CONTENT
+
+Extend the electronics curriculum to include every topic in the project’s current electronics syllabus and any listed but unimplemented engineering subject.
+
+Cover:
+
+1. Mathematics and physics for electronics.
+2. Electrical fundamentals.
+3. Passive components.
+4. Semiconductor physics and devices.
+5. Analog electronics.
+6. Digital electronics.
+7. Power supplies and power electronics.
+8. Measurement and instrumentation.
+9. Microcontrollers and embedded systems.
+10. PCB design and manufacturing.
+11. Communications and signal processing.
+12. Advanced electronics engineering.
+13. Practical repair and troubleshooting.
+
+Every complex topic must be explained separately and in appropriate depth.
+
+Examples of required expansion:
+
+Electrical fundamentals
+
+Develop separate instructional sections for Voltage, Current, Resistance, Conductance, Ohm’s law, Power, Energy, Series circuits, Parallel circuits, Kirchhoff’s laws, Voltage dividers, Current dividers, DC and AC, RMS, and measurement uncertainty.
+
+Include derivations, calculations, circuit diagrams, assumptions and practical measurements.
+
+Passive components
+
+Teach resistor colour codes, resistor tolerance, power dissipation, capacitor charging and discharging, ESR, leakage, inductive reactance, RL circuits, RLC resonance and inductor saturation in sufficient detail.
+
+Include actual numerical examples and identify datasheet-dependent properties.
+
+Semiconductor devices
+
+Teach PN-junction behaviour, diode I–V curves, rectification, Zener regulation, BJT operating regions, transistor biasing, MOSFET operating regions, gate-drive requirements, switching losses and safe operating area.
+
+Do not present a typical component parameter as a universal device constant.
+
+Analog electronics
+
+Develop detailed material on operational amplifier assumptions, feedback, amplifier gain, bandwidth, slew rate, saturation, offset, CMRR, PSRR, filters, oscillators and stability.
+
+Include ideal calculations and explain how real-device limitations change the result.
+
+Digital electronics
+
+Include truth tables, Boolean derivations, combinational circuits, latches, flip-flops, counters, setup and hold time, propagation delay, metastability and finite-state machines.
+
+Power electronics
+
+Explain rectification, filtering, linear regulators, switching converters, PWM, duty cycle, inductor ripple, output ripple, feedback, efficiency, switching losses, thermal design and EMI.
+
+Label ideal equations and practical approximations correctly.
+
+Instrumentation and multimeter design
+
+Expand the development of a practical low-voltage multimeter, including voltage dividers, ADC resolution, input impedance, reference voltage, analog front ends, input protection, autoranging, calibration, noise, measurement uncertainty and testing.
+
+Distinguish a conceptual design from a validated hardware design.
+
+Embedded systems
+
+Teach GPIO, timers, PWM, ADC, DAC, UART, SPI, I2C, DMA, interrupts, clock configuration, embedded C, firmware debugging and hardware interfacing.
+
+Connect lessons to practical STM32 and other supported microcontroller projects.
+
+PCB design
+
+Teach schematics, symbols, footprints, netlists, grounding, decoupling, trace width, current capacity, clearance, creepage, thermal management, EMC, design-rule checking and Gerber generation.
+
+Repair and troubleshooting
+
+Structure each case as:
+
+Symptom → Possible causes → Diagnostic measurements → Hypothesis → Confirming test → Fault isolation → Repair → Verification.
+
+Do not declare a component defective solely because a symptom resembles a known failure.
+
+==================================================
+PHASE 7 — CIRCUIT LABORATORIES AND SIMULATION INTEGRATION
+
+Preserve existing working laboratories and implement every referenced but missing laboratory.
+
+Validate all laboratory identifiers and links.
+
+If the application currently supports only educational models, describe them accurately.
+
+Do not call an animated diagram a numerical circuit simulator.
+
+For any actual electronics simulation engine, implement and test the advertised numerical analysis before connecting it to lesson claims.
+
+Where available, connect instructional content to:
+
+* Resistor circuit calculations.
+* RC and RL transient response.
+* Diode rectifiers.
+* Transistor switching.
+* MOSFET switching.
+* Operational amplifier circuits.
+* Logic gates.
+* Filters.
+* Switching power converters.
+
+Every laboratory-linked lesson must explain:
+
+* The experiment’s purpose.
+* Required components.
+* Component values.
+* Expected behaviour.
+* Governing formulas.
+* Measurement methods.
+* Likely mistakes.
+* Interpretation of simulation results.
+* Physical safety considerations.
+
+Do not invent simulation outputs or claim that an unsupported laboratory exists.
+
+If an engine cannot yet execute a particular experiment, flag that experiment as unavailable rather than presenting fabricated results.
+
+==================================================
+PHASE 8 — ASSESSMENT CONTENT AND GLOSSARY
+
+For every complete lesson, author at least ten useful assessment questions. Mathematically intensive lessons should include additional numerical problems.
+
+Use appropriate combinations of:
+
+* Multiple choice.
+* True or false.
+* Numerical calculations.
+* Short answers.
+* Conceptual reasoning.
+* Diagram interpretation.
+* Circuit analysis.
+* Troubleshooting scenarios.
+
+Each assessment item must have a valid answer and explanation.
+
+For multiple-choice questions, explain why distractors are incorrect when that helps learning.
+
+Avoid duplicated questions, ambiguous wording and unverified answers.
+
+Keep answer keys on the server and expose them only through the intended grading and review workflow.
+
+Expand the bilingual glossary with:
+
+* English term.
+* Punjabi explanation.
+* Definition.
+* Symbol.
+* SI unit when applicable.
+* Formula when applicable.
+* Related components.
+* Related lessons.
+
+==================================================
+PHASE 9 — CONTENT MANAGEMENT AND DATA INTEGRITY
+
+Reuse the existing repository’s curriculum and lesson data model.
+
+Do not place all course content in one excessively large source file.
+
+Organize content into stable, maintainable files or records representing:
+
+Course → Module → Lesson → Subtopic → Explanation → Formula → Worked example → Exercise → Assessment.
+
+Each lesson and subtopic must have a stable ID.
+
+Preserve slug uniqueness, lesson ordering, prerequisite references, translation relationships and existing user progress.
+
+If deeper subtopics require a small change to the lesson schema or lesson reader, make only that necessary compatible change, explain it and test backward compatibility.
+
+Implement content updates so they do not reset user progress or overwrite user-created notes.
+
+Add a coverage validator to detect:
+
+* Missing topics.
+* Empty content sections.
+* Missing Punjabi translations.
+* Missing English translations.
+* Missing answer explanations.
+* Invalid internal links.
+* Broken prerequisite IDs.
+* Invalid laboratory IDs.
+* Duplicate slugs.
+* Missing lesson mappings.
+* Unverified completeness claims.
+
+Do not mark a topic complete merely because its title or slug is present.
+
+==================================================
+PHASE 10 — CURRICULUM ACCURACY AND TECHNICAL REVIEW
+
+Audit numerical formulas, calculations, units, technical terminology and assessment answers.
+
+Correct the previously identified decibel explanation:
+
+* Half power is approximately −3.0103 dB.
+* Half voltage is approximately −6.0206 dB, for a voltage ratio measured under the appropriate equal-impedance assumption.
+
+Teach when approximations such as −3 dB and −6 dB are used.
+
+For each mathematical lesson, check equations using independently calculated examples or automated numerical tests where appropriate.
+
+For electronics lessons, distinguish:
+
+* Ideal theoretical models.
+* Real component behaviour.
+* Datasheet specifications.
+* Simulation assumptions.
+* Experimental results.
+
+Cite authoritative technical references when making specific datasheet, standards or component-specification claims.
+
+Do not invent citations, standards or component limits.
+
+==================================================
+PHASE 11 — TESTING AND RELEASE VERIFICATION
+
+Add tests for both application defects and educational data quality.
+
+Required technical tests:
+
+1. AI quota respects a rolling 24-hour interval.
+2. AI quotas cannot be bypassed with concurrent requests.
+3. Admin APIs reject unauthorized requests.
+4. Unverified identities cannot obtain allowlist-based admin access.
+5. Public quiz payloads do not expose correct answers.
+6. Quiz sessions cannot be submitted repeatedly.
+7. Quiz submissions cannot bypass session expiry.
+8. Quiz mode must match its stored session mode.
+9. Concurrent submissions do not award duplicate XP.
+10. Missing course tables and columns are detected.
+11. Seeding is safe to rerun.
+12. Database environment configuration matches documentation.
+13. Backend production compilation succeeds.
+14. Every internal lesson and task link resolves.
+15. Every laboratory reference resolves to an implemented lab.
+16. Every prerequisite refers to a valid topic or lesson.
+17. Coverage metrics do not mark empty or outline-only content complete.
+18. Translation checks detect missing Punjabi and English sections.
+19. Formula and answer validation tests pass.
+20. An end-to-end learner journey persists progress across sessions.
+
+Run the available build and test commands.
+
+Fix reproducible errors.
+
+If dependency installation, database access, browser testing or external API access is unavailable, state the specific limitation and provide the exact test that remains unverified.
+
+Never fabricate successful test results.
+
+==================================================
+PHASE 12 — IMPLEMENTATION PRIORITY
+
+Execute the work in this order:
+
+Priority 1: Critical authorization and security defects.
+
+Priority 2: AI usage quotas, quiz integrity and XP idempotency.
+
+Priority 3: Database configuration, migrations, seeding and production startup.
+
+Priority 4: Broken lesson links, laboratory IDs and enrollment.
+
+Priority 5: Accurate learning progress and study statistics.
+
+Priority 6: Detailed bilingual lesson architecture and content coverage validation.
+
+Priority 7: Expansion of every computer fundamentals subtopic.
+
+Priority 8: Expansion of every electronics engineering subtopic.
+
+Priority 9: Complete assessments, glossary and practical experiments.
+
+Priority 10: Automated verification, documentation and final completion report.
+
+Implement changes in manageable batches. Preserve all previously verified working functionality.
+
+==================================================
+PHASE 13 — REQUIRED FINAL REPORT
+
+After implementation, provide an evidence-based report containing:
+
+A. Security fixes:
+
+* Defect.
+* File modified.
+* Correction.
+* Test result.
+
+B. Backend and database fixes:
+
+* Configuration changes.
+* Migration changes.
+* Seeding behaviour.
+* Production startup verification.
+
+C. Curriculum expansion:
+
+* Number of courses.
+* Number of modules.
+* Number of lesson records.
+* Number of substantive subtopics.
+* Number of worked examples.
+* Number of assessment questions.
+* Number of glossary entries.
+
+D. Language completeness:
+
+* Punjabi Gurmukhi completion.
+* English completion.
+* Missing translations.
+* Content awaiting technical review.
+
+E. Laboratory integrity:
+
+* Valid laboratory references.
+* Missing laboratories.
+* Verified simulation capabilities.
+* Unsupported simulation capabilities.
+
+F. Testing:
+
+* Commands executed.
+* Tests passed.
+* Tests failed.
+* Tests not executed.
+* Outstanding defects.
+
+G. Remaining work:
+
+* File or feature.
+* Risk.
+* Required action.
+* Priority.
+
+Calculate all counts from the actual repository or database.
+
+Do not estimate completion percentages without a defined measurement method.
+
+Do not claim a lesson is complete based solely on its title.
+
+Do not report a feature as verified when it has not been executed or inspected sufficiently.
+
+==================================================
+BEGIN IMPLEMENTATION NOW
+
+First inspect the existing source code and curriculum.
+
+Create the defect register and coverage report.
+
+Then immediately start implementing the highest-priority fixes.
+
+After the security and reliability repairs, expand actual lesson content at the subtopic level in Punjabi Gurmukhi and English.
+
+Continue through the computer fundamentals and electronics curricula until all feasible requirements are implemented and verified.
+
+The final deliverable must be a more secure, more reliable and substantially more comprehensive educational platform—not just a longer syllabus, another design mockup or a report of proposed changes.

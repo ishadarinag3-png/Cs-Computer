@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import 'katex/dist/katex.min.css';
 import { onAuthStateChanged, signInWithPopup, signOut, User as FirebaseUser } from 'firebase/auth';
 import { auth, googleAuthProvider } from './lib/firebase.ts';
-import { ComputerLaboratory, LabId } from './components/ComputerLaboratory.tsx';
+import { ComputerLaboratory, LabId, resolveValidLabId } from './components/ComputerLaboratory.tsx';
 import { TaskManagerView, StudyTask } from './components/TaskManagerView.tsx';
 import {
   MathMessageRenderer,
@@ -11,6 +11,7 @@ import {
   getLessonFormulas,
 } from './components/MathMessageRenderer.tsx';
 import { LessonTemplateEditor } from './components/LessonTemplateEditor.tsx';
+import { enrichGlossaryTermMetadata } from './db/curriculum/blueprint.ts';
 import {
   BookOpen,
   Cpu,
@@ -73,25 +74,25 @@ const GUEST_PROFILE = {
 const GUEST_DEMO_TASKS: StudyTask[] = [
   {
     id: -101,
-    title: '[Demo Sample] Master Binary (0 & 1) and Logic Gates in Lab D & E',
+    title: '[Demo Sample] Master Binary (0 & 1), Karnaugh Maps, and Logic Gates in Lab D & E',
     description: 'Sample preview task — Sign in with Google to save your own study tasks in Cloud SQL.',
-    category: 'Binary & Assembly',
+    category: 'Binary & Digital Logic',
     priority: 'high',
     dueDate: new Date(Date.now() + 86400000).toISOString().slice(0, 16),
     completed: false,
     notifyEnabled: false,
-    linkedLessonSlug: 'how-binary-and-logic-gates-work',
+    linkedLessonSlug: 'digital-logic-binary-karnaugh-combinational',
   },
   {
     id: -102,
-    title: '[Demo Sample] Practice Discrete Math Sets & Propositional Logic',
-    description: 'Sample preview task — Review De Morgan’s Laws, Set Intersections, and Median vs Mean.',
-    category: 'Discrete Math',
+    title: '[Demo Sample] Practice SI Units, Logarithmic Decibels (-3.0103 dB) & Trigonometry',
+    description: 'Sample preview task — Review SI engineering prefixes, decibels, and AC waveforms in Level 0.',
+    category: 'Engineering Math',
     priority: 'medium',
     dueDate: new Date(Date.now() + 172800000).toISOString().slice(0, 16),
     completed: false,
     notifyEnabled: false,
-    linkedLessonSlug: 'cs-math-logic-discrete-statistics',
+    linkedLessonSlug: 'math-foundations-si-algebra-trig',
   },
 ];
 
@@ -157,11 +158,13 @@ export default function App() {
   const [achievementsCatalog, setAchievementsCatalog] = useState<any[]>([]);
   const [syllabusBlueprint, setSyllabusBlueprint] = useState<any[]>([]);
   const [syllabusCoverage, setSyllabusCoverage] = useState<any | null>(null);
-  const [selectedLessonSlug, setSelectedLessonSlug] = useState<string>('what-is-a-computer-ipos');
+  const [selectedLessonSlug, setSelectedLessonSlug] = useState<string>('math-foundations-si-algebra-trig');
 
   // User Learning State (Separated from Guest Demo Samples)
   const [tasks, setTasks] = useState<StudyTask[]>(GUEST_DEMO_TASKS);
   const [completedLessonIds, setCompletedLessonIds] = useState<number[]>([]);
+  const [enrolledCourseIds, setEnrolledCourseIds] = useState<number[]>([]);
+  const [lessonOpenedAtMs, setLessonOpenedAtMs] = useState<number>(() => Date.now());
   const [quizAttempts, setQuizAttempts] = useState<any[]>([]);
   const [bookmarkedLessonIds, setBookmarkedLessonIds] = useState<number[]>([]);
   const [lessonNotes, setLessonNotes] = useState<Record<number, string>>({});
@@ -397,6 +400,9 @@ export default function App() {
                 .filter((p: any) => p.completed)
                 .map((p: any) => p.lessonId)
             );
+            setEnrolledCourseIds(
+              (data.enrollments || []).map((e: any) => e.courseId)
+            );
             setQuizAttempts(data.quizAttempts || []);
             setBookmarkedLessonIds((data.bookmarks || []).map((b: any) => b.lessonId));
             const map: Record<number, string> = {};
@@ -443,6 +449,7 @@ export default function App() {
   useEffect(() => {
     if (currentLesson) {
       setNoteDraft(lessonNotes[currentLesson.id] || '');
+      setLessonOpenedAtMs(Date.now());
     }
   }, [currentLesson?.id, lessonNotes]);
 
@@ -529,7 +536,30 @@ export default function App() {
     setTasks((prev) => prev.filter((t) => t.id !== id));
   };
 
-  // Mark Lesson Complete (Authoritative Server Persistence)
+  const handleEnrollCourse = async (courseId: number) => {
+    setActionErrorMsg(null);
+    if (!firebaseUser) {
+      setActionErrorMsg('Sign in with Google to enroll in courses and track structured progression.');
+      return;
+    }
+    try {
+      const res = await authenticatedFetch(`/api/courses/${courseId}/enroll`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to enroll in course');
+      }
+      if (!enrolledCourseIds.includes(courseId)) {
+        setEnrolledCourseIds((prev) => [...prev, courseId]);
+      }
+    } catch (err: any) {
+      setActionErrorMsg(err.message || 'Could not enroll in course.');
+    }
+  };
+
+  // Mark Lesson Complete (Authoritative Server Persistence with Elapsed Time Tracking)
   const handleCompleteLesson = async (lessonId: number) => {
     setActionErrorMsg(null);
     if (!firebaseUser) {
@@ -537,10 +567,19 @@ export default function App() {
       return;
     }
     try {
+      const elapsedSeconds = Math.max(
+        60,
+        Math.min(14400, Math.round((Date.now() - lessonOpenedAtMs) / 1000))
+      );
+      const elapsedMinutes = Math.max(1, Math.min(240, Math.round(elapsedSeconds / 60)));
       const res = await authenticatedFetch(`/api/lessons/${lessonId}/progress`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ timeSpentMinutes: 15 }),
+        body: JSON.stringify({
+          timeSpentMinutes: elapsedMinutes,
+          timeSpentSeconds: elapsedSeconds,
+          activeInteractionSeconds: elapsedSeconds,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -550,7 +589,11 @@ export default function App() {
         setCompletedLessonIds((prev) => [...prev, lessonId]);
       }
       if (typeof data.xpEarned === 'number' && data.xpEarned > 0) {
-        setUserProfile((p) => ({ ...p, xp: p.xp + data.xpEarned }));
+        setUserProfile((p) => ({
+          ...p,
+          xp: p.xp + data.xpEarned,
+          streakDays: typeof data.streakDays === 'number' ? data.streakDays : p.streakDays,
+        }));
       }
       if (data.newlyUnlocked?.length > 0) {
         setUnlockedCodes((prev) => [...new Set([...prev, ...data.newlyUnlocked])]);
@@ -627,8 +670,9 @@ export default function App() {
       const data = await res.json();
       if (res.ok && data.session) {
         setActiveQuizSessionId(data.session.id);
-        if (typeof data.timeLimitSeconds === 'number') {
-          setTimeLeftSeconds(data.timeLimitSeconds);
+        const serverLimit = data.session.timeLimitSeconds ?? data.timeLimitSeconds;
+        if (typeof serverLimit === 'number') {
+          setTimeLeftSeconds(serverLimit);
         }
       }
     } catch (err: any) {
@@ -842,7 +886,12 @@ export default function App() {
   };
 
   const allGlossaryTerms = lessons.flatMap((l) =>
-    (l.terminologyJson || []).map((t: any) => ({ ...t, lessonTitle: l.titleEn }))
+    (l.terminologyJson || []).map((t: any) => ({
+      ...t,
+      lessonTitle: l.titleEn,
+      lessonSlug: l.slug,
+      meta: enrichGlossaryTermMetadata(t.term, t.meaningEn),
+    }))
   );
 
   const filteredGlossary = allGlossaryTerms.filter(
@@ -1448,7 +1497,7 @@ export default function App() {
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               <div className={`lg:col-span-4 p-4 sm:p-5 rounded-xl border space-y-4 ${surfaceCard}`}>
                 <div className="flex items-center justify-between">
-                  <h2 className="text-base font-bold">Courses & Levels (1–9)</h2>
+                  <h2 className="text-base font-bold">Courses & Levels (0–12)</h2>
                   {isAdmin && (
                     <button
                       onClick={() => {
@@ -1468,10 +1517,25 @@ export default function App() {
                 <div className="space-y-2.5">
                   {courses.map((course) => {
                     const courseLessons = lessons.filter((l) => l.courseId === course.id);
+                    const isEnrolled = enrolledCourseIds.includes(course.id);
                     return (
                       <div key={course.id} className={`p-3 rounded-xl border space-y-2 ${subtlePanel}`}>
-                        <div className="text-xs font-bold text-sky-500">{course.titleEn}</div>
-                        <div className="text-xs text-amber-500 font-medium">{course.titlePa}</div>
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="text-xs font-bold text-sky-500">{course.titleEn}</div>
+                            <div className="text-xs text-amber-500 font-medium">{course.titlePa}</div>
+                          </div>
+                          <button
+                            onClick={() => handleEnrollCourse(course.id)}
+                            className={`px-2 py-1 rounded text-[11px] font-bold shrink-0 ${
+                              isEnrolled
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                : 'bg-sky-600/20 text-sky-400 border border-sky-500/30 hover:bg-sky-600 hover:text-white'
+                            }`}
+                          >
+                            {isEnrolled ? 'Enrolled ✓' : 'Enroll'}
+                          </button>
+                        </div>
                         <div className="space-y-1.5 pt-1">
                           {courseLessons.map((l) => {
                             const active = currentLesson?.id === l.id;
@@ -1744,9 +1808,7 @@ export default function App() {
                       <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                         <button
                           onClick={() => {
-                            setSelectedLabId(
-                              (currentLesson.interactiveLabId as LabId) || 'hardware-explorer'
-                            );
+                            setSelectedLabId(resolveValidLabId(currentLesson.interactiveLabId));
                             setActiveSection('laboratory');
                           }}
                           className="px-4 py-2.5 min-h-[44px] rounded-lg bg-sky-600 text-white text-xs font-bold"
@@ -1861,6 +1923,8 @@ export default function App() {
                   const activeQuiz = quizzes.find((q) => q.id === selectedQuizId) || quizzes[0];
                   if (!activeQuiz) return <div>Select a quiz to begin.</div>;
                   const activeQuestions = questions.filter((q) => q.quizId === activeQuiz.id);
+                  const isTimedExpired =
+                    quizMode === 'timed' && timeLeftSeconds <= 0 && !lastQuizResult;
 
                   return (
                     <>
@@ -1873,6 +1937,8 @@ export default function App() {
                           onClick={() => {
                             const nextMode = quizMode === 'practice' ? 'timed' : 'practice';
                             setQuizMode(nextMode);
+                            setLastQuizResult(null);
+                            setQuizSubmitError(null);
                             startServerQuizSession(activeQuiz.id, nextMode);
                           }}
                           className={`px-3 py-2 min-h-[40px] rounded-lg border text-xs font-semibold flex items-center gap-1.5 ${subtlePanel}`}
@@ -1899,6 +1965,20 @@ export default function App() {
                         </span>
                       </div>
 
+                      {isTimedExpired && (
+                        <div className="p-3.5 rounded-xl border border-amber-500/50 bg-amber-500/15 text-xs font-semibold text-amber-200 flex items-center justify-between gap-2">
+                          <span>
+                            Timed session has expired (0:00). Answer inputs are locked; start a fresh timed session or switch to Practice Mode.
+                          </span>
+                          <button
+                            onClick={() => startServerQuizSession(activeQuiz.id, 'timed')}
+                            className="px-3 py-1.5 rounded-lg bg-amber-500 text-slate-950 font-bold shrink-0"
+                          >
+                            Restart Timed Session
+                          </button>
+                        </div>
+                      )}
+
                       {quizSubmitError && (
                         <div className="p-3.5 rounded-xl border border-rose-500/50 bg-rose-500/15 text-xs font-semibold text-rose-200">
                           {quizSubmitError}
@@ -1923,6 +2003,7 @@ export default function App() {
                                 <input
                                   type="text"
                                   placeholder="Type answer..."
+                                  disabled={isTimedExpired || quizSubmitting}
                                   value={chosen}
                                   onChange={(e) =>
                                     setQuizAnswers((prev) => ({
@@ -1930,20 +2011,21 @@ export default function App() {
                                       [String(q.id)]: e.target.value,
                                     }))
                                   }
-                                  className={`w-full px-3 py-2.5 rounded-lg border text-sm font-mono ${surfaceCard}`}
+                                  className={`w-full px-3 py-2.5 rounded-lg border text-sm font-mono disabled:opacity-50 ${surfaceCard}`}
                                 />
                               ) : (
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                                   {(q.optionsJson || []).map((opt: string) => (
                                     <button
                                       key={opt}
+                                      disabled={isTimedExpired || quizSubmitting}
                                       onClick={() =>
                                         setQuizAnswers((prev) => ({
                                           ...prev,
                                           [String(q.id)]: opt,
                                         }))
                                       }
-                                      className={`p-3 min-h-[44px] rounded-lg border text-left text-xs font-medium transition-colors ${
+                                      className={`p-3 min-h-[44px] rounded-lg border text-left text-xs font-medium transition-colors disabled:opacity-50 ${
                                         chosen === opt
                                           ? 'bg-sky-600 text-white border-sky-400 font-bold'
                                           : surfaceCard
@@ -1984,10 +2066,14 @@ export default function App() {
                       <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                         <button
                           onClick={() => handleSubmitQuiz(activeQuiz.id)}
-                          disabled={quizSubmitting}
+                          disabled={quizSubmitting || isTimedExpired}
                           className="w-full sm:w-auto px-6 py-3 min-h-[44px] rounded-xl bg-sky-600 text-white text-sm font-bold disabled:opacity-50"
                         >
-                          {quizSubmitting ? 'Grading on Server...' : 'Submit Answers for Server Grading'}
+                          {quizSubmitting
+                            ? 'Grading on Server...'
+                            : isTimedExpired
+                              ? 'Timed Session Expired'
+                              : 'Submit Answers for Server Grading'}
                         </button>
 
                         {lastQuizResult && (
@@ -2204,11 +2290,37 @@ export default function App() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 {filteredGlossary.map((item, idx) => (
-                  <div key={idx} className={`p-4 rounded-xl border space-y-1 ${subtlePanel}`}>
-                    <div className="text-sm font-bold text-sky-500">{item.term}</div>
-                    <div className="text-xs font-semibold text-amber-500">{item.punjabi}</div>
+                  <div key={idx} className={`p-4 rounded-xl border space-y-2 ${subtlePanel}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-bold text-sky-500">{item.term}</div>
+                        <div className="text-xs font-semibold text-amber-500">{item.punjabi}</div>
+                      </div>
+                      <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">
+                        {item.meta?.symbol} · {item.meta?.siUnit}
+                      </span>
+                    </div>
                     <p className="text-xs leading-relaxed">{item.meaningPa}</p>
                     <p className="text-xs text-slate-400">{item.meaningEn}</p>
+                    {item.meta?.formula && (
+                      <div className="text-[11px] font-mono text-emerald-400 pt-1">
+                        Formula: {item.meta.formula}
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-500/15 text-[11px] text-slate-400">
+                      <span className="truncate">{item.lessonTitle}</span>
+                      {item.lessonSlug && (
+                        <button
+                          onClick={() => {
+                            setSelectedLessonSlug(item.lessonSlug);
+                            setActiveSection('curriculum');
+                          }}
+                          className="text-sky-400 font-semibold hover:underline shrink-0"
+                        >
+                          Lesson →
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>

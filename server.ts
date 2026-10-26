@@ -21,6 +21,8 @@ import {
   createTaskForUser,
   toggleTaskStatus,
   deleteTaskForUser,
+  enrollUserInCourse,
+  checkLessonPrerequisitesMet,
   markLessonComplete,
   startQuizSessionServerSide,
   submitQuizAttemptServerSide,
@@ -30,6 +32,7 @@ import {
   saveTutorConversationMessage,
   getTutorConversationHistory,
   countRecentUserTutorMessages,
+  reserveTutorQuotaSlot,
 } from './src/db/queries.ts';
 import { COMPLETE_SYLLABUS_BLUEPRINT } from './src/db/seed-data.ts';
 
@@ -39,6 +42,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const app = express();
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '100kb' }));
 
 const PositiveIntSchema = z.coerce.number().int().positive();
@@ -258,6 +262,36 @@ app.post('/api/lessons/:id/progress', requireAuth, async (req: AuthRequest, res)
   }
 });
 
+app.post('/api/courses/:id/enroll', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const idParsed = PositiveIntSchema.safeParse(req.params.id);
+    if (!idParsed.success) {
+      return res.status(400).json({ error: 'Invalid course ID parameter' });
+    }
+    const result = await enrollUserInCourse(req.user!.uid, idParsed.data);
+    const dashboardState = await getUserDashboardState(req.user!.uid);
+    res.json({
+      ...result,
+      enrolledCourseIds: dashboardState.enrolledCourseIds,
+    });
+  } catch (error) {
+    return handleRouteError(res, error, 'Failed to enroll in course');
+  }
+});
+
+app.get('/api/lessons/:id/prerequisites', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const idParsed = PositiveIntSchema.safeParse(req.params.id);
+    if (!idParsed.success) {
+      return res.status(400).json({ error: 'Invalid lesson ID parameter' });
+    }
+    const status = await checkLessonPrerequisitesMet(req.user!.uid, idParsed.data);
+    res.json(status);
+  } catch (error) {
+    return handleRouteError(res, error, 'Failed to check lesson prerequisites');
+  }
+});
+
 // 7. Server-Enforced Quiz Session Start & Authoritative Grading
 const QuizSessionStartSchema = z
   .object({
@@ -439,6 +473,7 @@ app.post(
   requireAuth,
   aiTutorRateLimiter,
   async (req: AuthRequest, res) => {
+    let releaseSlot: (() => void) | null = null;
     try {
       const parsed = TutorRequestSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -449,14 +484,15 @@ app.post(
       }
 
       const verifiedUid = req.user!.uid;
-      const usedToday = await countRecentUserTutorMessages(verifiedUid, 24);
-      if (usedToday >= AI_DAILY_USER_QUOTA) {
-        return res.status(429).json({
-          error: `Daily AI Tutor quota reached (${AI_DAILY_USER_QUOTA} questions per 24 hours). Please continue tomorrow.`,
-        });
-      }
+      const reservation = await reserveTutorQuotaSlot(
+        verifiedUid,
+        AI_DAILY_USER_QUOTA,
+        24 * 3600 * 1000
+      );
+      releaseSlot = reservation.release;
+      const usedToday = reservation.usedToday;
 
-      if (!process.env.GEMINI_API_KEY) {
+      if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'MY_GEMINI_API_KEY') {
         return res.status(503).json({
           error: 'AI Tutor service is currently unavailable.',
         });
@@ -485,32 +521,52 @@ Rules:
 4. Mode instruction: ${modeInstructions[mode] || modeInstructions['child-friendly']}
 5. Current Lesson Context: ${lessonTitle || 'General Computer Science & Math'} — ${lessonContext || ''}`;
 
+      const withTimeout = <T,>(promise: Promise<T>, ms: number): Promise<T> =>
+        new Promise<T>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error(`AI upstream timeout after ${ms}ms`)), ms);
+          promise
+            .then((val) => {
+              clearTimeout(timer);
+              resolve(val);
+            })
+            .catch((err) => {
+              clearTimeout(timer);
+              reject(err);
+            });
+        });
+
       let response;
       let activeModel = 'gemini-4-argon';
       try {
-        response = await ai.models.generateContent({
-          model: 'gemini-4-argon',
-          contents: prompt,
-          config: {
-            systemInstruction,
-            thinkingConfig: {
-              thinkingLevel: ThinkingLevel.HIGH,
+        response = await withTimeout(
+          ai.models.generateContent({
+            model: 'gemini-4-argon',
+            contents: prompt,
+            config: {
+              systemInstruction,
+              thinkingConfig: {
+                thinkingLevel: ThinkingLevel.HIGH,
+              },
             },
-          },
-        });
+          }),
+          25_000
+        );
       } catch (primaryError) {
         console.warn('Falling back to gemini-3.8-flash with ThinkingLevel.HIGH:', primaryError);
         activeModel = 'gemini-3.8-flash';
-        response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: prompt,
-          config: {
-            systemInstruction,
-            thinkingConfig: {
-              thinkingLevel: ThinkingLevel.HIGH,
+        response = await withTimeout(
+          ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: prompt,
+            config: {
+              systemInstruction,
+              thinkingConfig: {
+                thinkingLevel: ThinkingLevel.HIGH,
+              },
             },
-          },
-        });
+          }),
+          25_000
+        );
       }
 
       const replyText =
@@ -538,10 +594,17 @@ Rules:
         remainingDailyQuota: Math.max(0, AI_DAILY_USER_QUOTA - (usedToday + 1)),
       });
     } catch (error) {
+      if (error instanceof AppValidationError) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
       console.error('Error in POST /api/ai/tutor:', error);
       res.status(502).json({
         error: 'AI Tutor service encountered a temporary upstream error. Please try again shortly.',
       });
+    } finally {
+      if (releaseSlot) {
+        releaseSlot();
+      }
     }
   }
 );

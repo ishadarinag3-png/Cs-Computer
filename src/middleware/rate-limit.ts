@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import type { AuthenticatedRequest } from './auth.js';
+import type { AuthenticatedRequest } from './auth.ts';
 
 interface RateBucket {
   count: number;
@@ -14,6 +14,17 @@ export function resetRateLimitBuckets() {
   userBuckets.clear();
 }
 
+/**
+ * Extracts client IP using Express's configured trust proxy policy (`req.ip`)
+ * or socket remoteAddress rather than trusting unvalidated X-Forwarded-For headers.
+ */
+export function resolveClientIp(req: Request): string {
+  if (req.ip && req.ip.trim().length > 0) {
+    return req.ip.trim();
+  }
+  return req.socket?.remoteAddress || 'unknown-ip';
+}
+
 export function createRateLimiter(options: {
   windowMs: number;
   maxPerIp: number;
@@ -24,11 +35,8 @@ export function createRateLimiter(options: {
 
   return (req: Request, res: Response, next: NextFunction) => {
     const now = Date.now();
-    const rawIp =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-      req.socket.remoteAddress ||
-      'unknown-ip';
-    const ipKey = `${keyPrefix}:ip:${rawIp}`;
+    const clientIp = resolveClientIp(req);
+    const ipKey = `${keyPrefix}:ip:${clientIp}`;
 
     const ipEntry = ipBuckets.get(ipKey);
     if (!ipEntry || now > ipEntry.resetAt) {

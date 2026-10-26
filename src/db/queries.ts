@@ -1,4 +1,4 @@
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, gte, sql } from 'drizzle-orm';
 import { db, pool } from './index.ts';
 import {
   users,
@@ -29,22 +29,142 @@ export class AppValidationError extends Error {
   }
 }
 
-export async function checkDatabaseReadiness(): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
+export const EXPECTED_SCHEMA_TABLES = [
+  'users',
+  'courses',
+  'modules',
+  'lessons',
+  'enrollments',
+  'quizzes',
+  'questions',
+  'quiz_sessions',
+  'quiz_attempts',
+  'lesson_progress',
+  'tasks',
+  'bookmarks',
+  'notes',
+  'achievements',
+  'user_achievements',
+  'tutor_messages',
+];
+
+export const REQUIRED_TABLE_COLUMNS = [
+  'users.uid',
+  'users.email',
+  'users.role',
+  'users.xp',
+  'users.streak_days',
+  'users.last_active_date',
+  'courses.slug',
+  'courses.level_number',
+  'lessons.slug',
+  'lessons.course_id',
+  'lessons.module_id',
+  'lessons.objectives_json',
+  'lessons.prerequisites_json',
+  'lessons.misconceptions_json',
+  'lessons.terminology_json',
+  'lessons.interactive_lab_id',
+  'quizzes.lesson_id',
+  'quizzes.time_limit_seconds',
+  'quizzes.passing_score_percent',
+  'questions.quiz_id',
+  'questions.correct_answer',
+  'quiz_sessions.user_uid',
+  'quiz_sessions.quiz_id',
+  'quiz_sessions.mode',
+  'quiz_sessions.expires_at',
+  'quiz_sessions.submitted_at',
+  'quiz_attempts.user_uid',
+  'quiz_attempts.quiz_id',
+  'quiz_attempts.score_percent',
+  'quiz_attempts.passed',
+  'lesson_progress.user_uid',
+  'lesson_progress.lesson_id',
+  'lesson_progress.completed',
+  'lesson_progress.time_spent_minutes',
+  'tutor_messages.user_uid',
+  'tutor_messages.role',
+  'tutor_messages.created_at',
+];
+
+export async function checkDatabaseReadiness(): Promise<{
+  ok: boolean;
+  latencyMs: number;
+  schemaReady?: boolean;
+  missingTables?: string[];
+  missingColumns?: string[];
+  curriculumReady?: boolean;
+  courseCount?: number;
+  lessonCount?: number;
+  aiConfigured?: boolean;
+  error?: string;
+}> {
   const start = Date.now();
+  const aiConfigured = Boolean(
+    process.env.GEMINI_API_KEY &&
+      process.env.GEMINI_API_KEY.trim() !== '' &&
+      process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'
+  );
   try {
     await pool.query('SELECT 1 AS ready');
-    return { ok: true, latencyMs: Date.now() - start };
+
+    const tablesRes = await pool.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`
+    );
+    const existingTables = new Set(tablesRes.rows.map((r) => r.table_name));
+    const missingTables = EXPECTED_SCHEMA_TABLES.filter((t) => !existingTables.has(t));
+
+    const colsRes = await pool.query<{ table_name: string; column_name: string }>(
+      `SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'`
+    );
+    const existingCols = new Set(colsRes.rows.map((r) => `${r.table_name}.${r.column_name}`));
+    const missingColumns = REQUIRED_TABLE_COLUMNS.filter((c) => !existingCols.has(c));
+
+    const schemaReady = missingTables.length === 0 && missingColumns.length === 0;
+    if (!schemaReady) {
+      return {
+        ok: false,
+        latencyMs: Date.now() - start,
+        schemaReady: false,
+        missingTables,
+        missingColumns,
+        aiConfigured,
+        error: `Schema incomplete: missing tables [${missingTables.join(', ')}], missing columns [${missingColumns.join(', ')}]`,
+      };
+    }
+
+    const courseCountRes = await pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM courses');
+    const lessonCountRes = await pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM lessons');
+    const courseCount = Number(courseCountRes.rows[0]?.count ?? 0);
+    const lessonCount = Number(lessonCountRes.rows[0]?.count ?? 0);
+
+    return {
+      ok: true,
+      latencyMs: Date.now() - start,
+      schemaReady: true,
+      missingTables: [],
+      missingColumns: [],
+      curriculumReady: courseCount >= SEED_COURSES.length && lessonCount >= EXPECTED_SEED_LESSON_COUNT,
+      courseCount,
+      lessonCount,
+      aiConfigured,
+    };
   } catch (err: any) {
     return {
       ok: false,
       latencyMs: Date.now() - start,
+      schemaReady: false,
+      aiConfigured,
       error: 'Database connection check failed',
     };
   }
 }
 
+export const SEED_CONTENT_VERSION = '2026.10.26.v3';
 let seedingPromise: Promise<void> | null = null;
 let lastSeededLessonCount = 0;
+let lastAppliedSeedVersion = '';
 
 const EXPECTED_SEED_LESSON_COUNT = SEED_COURSES.reduce(
   (sum, c) => sum + c.modules.reduce((mSum, m) => mSum + m.lessons.length, 0),
@@ -52,7 +172,11 @@ const EXPECTED_SEED_LESSON_COUNT = SEED_COURSES.reduce(
 );
 
 export async function ensureCurriculumSeeded(force = false): Promise<void> {
-  if (!force && lastSeededLessonCount >= EXPECTED_SEED_LESSON_COUNT) {
+  if (
+    !force &&
+    lastAppliedSeedVersion === SEED_CONTENT_VERSION &&
+    lastSeededLessonCount >= EXPECTED_SEED_LESSON_COUNT
+  ) {
     return;
   }
   if (seedingPromise) {
@@ -61,7 +185,7 @@ export async function ensureCurriculumSeeded(force = false): Promise<void> {
 
   seedingPromise = (async () => {
     try {
-      if (!force) {
+      if (!force && lastAppliedSeedVersion === SEED_CONTENT_VERSION) {
         const existingCourses = await db.select().from(courses);
         const existingLessons = await db.select().from(lessons);
         const existingQuizzes = await db.select().from(quizzes);
@@ -76,16 +200,7 @@ export async function ensureCurriculumSeeded(force = false): Promise<void> {
       }
 
       await db.transaction(async (tx) => {
-        // Clean up any obsolete course records that are not part of the active SEED_COURSES catalog
-        const validCourseSlugs = new Set(SEED_COURSES.map((c) => c.slug));
-        const existingCoursesInDb = await tx.select().from(courses);
-        for (const existingCourse of existingCoursesInDb) {
-          if (!validCourseSlugs.has(existingCourse.slug)) {
-            await tx.delete(courses).where(eq(courses.id, existingCourse.id));
-          }
-        }
-
-        // 1. Idempotently upsert Achievements Catalog
+        // 1. Idempotently upsert Achievements Catalog (never deletes user_achievements)
         for (const ach of INITIAL_ACHIEVEMENTS) {
           await tx
             .insert(achievements)
@@ -104,6 +219,7 @@ export async function ensureCurriculumSeeded(force = false): Promise<void> {
         }
 
         // 2. Idempotently upsert Courses, Modules, Lessons, Quizzes, and Questions
+        // Preserves existing primary keys and all user progress/notes/bookmarks/enrollments.
         for (const courseData of SEED_COURSES) {
           const [insertedCourse] = await tx
             .insert(courses)
@@ -271,6 +387,7 @@ export async function ensureCurriculumSeeded(force = false): Promise<void> {
 
       const finalLessons = await db.select().from(lessons);
       lastSeededLessonCount = finalLessons.length;
+      lastAppliedSeedVersion = SEED_CONTENT_VERSION;
     } catch (error) {
       console.error('Failed to seed curriculum:', error);
       throw new Error('Failed to initialize curriculum database.', { cause: error });
@@ -280,6 +397,25 @@ export async function ensureCurriculumSeeded(force = false): Promise<void> {
   })();
 
   return seedingPromise;
+}
+
+export function computeUpdatedStreak(lastActiveDate: string | null | undefined, currentStreak: number, now = new Date()): {
+  todayStr: string;
+  streakDays: number;
+} {
+  const todayStr = now.toISOString().slice(0, 10);
+  if (!lastActiveDate) {
+    return { todayStr, streakDays: Math.max(1, currentStreak || 1) };
+  }
+  if (lastActiveDate === todayStr) {
+    return { todayStr, streakDays: Math.max(1, currentStreak || 1) };
+  }
+  const yesterday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
+  const yesterdayStr = yesterday.toISOString().slice(0, 10);
+  if (lastActiveDate === yesterdayStr) {
+    return { todayStr, streakDays: Math.max(1, currentStreak || 0) + 1 };
+  }
+  return { todayStr, streakDays: 1 };
 }
 
 export async function getOrCreateUser(
@@ -292,6 +428,10 @@ export async function getOrCreateUser(
     const todayStr = new Date().toISOString().slice(0, 10);
     const assignedRole = isTrustedAdmin ? 'admin' : 'student';
 
+    const existingUserRows = await db.select().from(users).where(eq(users.uid, uid));
+    const existingUser = existingUserRows[0];
+    const { streakDays } = computeUpdatedStreak(existingUser?.lastActiveDate, existingUser?.streakDays ?? 1);
+
     const result = await db
       .insert(users)
       .values({
@@ -299,6 +439,7 @@ export async function getOrCreateUser(
         email,
         displayName: displayName || email.split('@')[0] || 'Scholar',
         role: assignedRole,
+        streakDays,
         lastActiveDate: todayStr,
       })
       .onConflictDoUpdate({
@@ -306,6 +447,7 @@ export async function getOrCreateUser(
         set: {
           email,
           role: assignedRole,
+          streakDays,
           lastActiveDate: todayStr,
         },
       })
@@ -313,7 +455,7 @@ export async function getOrCreateUser(
 
     const user = result[0];
 
-    // Seed initial helpful study tasks if user has zero tasks
+    // Seed initial helpful study tasks if user has zero tasks (using valid curriculum lesson slugs)
     const existingTasks = await db.select().from(tasks).where(eq(tasks.userUid, uid));
     if (existingTasks.length === 0) {
       const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 16);
@@ -321,36 +463,36 @@ export async function getOrCreateUser(
       await db.insert(tasks).values([
         {
           userUid: uid,
-          title: 'Master Binary (0 & 1) and Logic Gates in Lab D & E',
+          title: 'Master Binary (0 & 1), Karnaugh Maps, and Logic Gates in Lab D & E',
           description: 'Toggle 8-bit switches and test XOR / AND truth tables with Punjabi explanations.',
-          category: 'Binary & Assembly',
+          category: 'Binary & Digital Logic',
           priority: 'high',
           dueDate: tomorrow,
           completed: false,
           notifyEnabled: true,
-          linkedLessonSlug: 'how-binary-and-logic-gates-work',
+          linkedLessonSlug: 'digital-logic-binary-karnaugh-combinational',
         },
         {
           userUid: uid,
-          title: 'Complete CPU Instruction Cycle (Fetch-Decode-Execute) Simulation',
-          description: 'Step through the assembly program in Lab B and take the Level 2 Quiz.',
-          category: 'Computer Science',
+          title: 'Complete MCU & CPU Instruction Cycle (Fetch-Decode-Execute) Simulation',
+          description: 'Step through the register & ALU pipeline in Lab B and complete the Level 4 Quiz.',
+          category: 'Computer Architecture',
           priority: 'medium',
           dueDate: twoDays,
           completed: false,
           notifyEnabled: true,
-          linkedLessonSlug: 'cpu-alu-registers-memory-hierarchy',
+          linkedLessonSlug: 'mcu-architecture-memory-gpio-interrupts',
         },
         {
           userUid: uid,
-          title: 'Practice Discrete Math Sets & Propositional Logic',
-          description: 'Review De Morgan’s Laws, Set Intersections, and Median vs Mean in Level 9.',
-          category: 'Discrete Math',
+          title: 'Practice Engineering SI Units, Logarithms, Decibels & Complex Phasors',
+          description: 'Review SI prefixes, -3.0103 dB half-power derivations, and Euler’s identity in Level 0.',
+          category: 'Engineering Math',
           priority: 'high',
           dueDate: twoDays,
           completed: false,
           notifyEnabled: true,
-          linkedLessonSlug: 'cs-math-logic-discrete-statistics',
+          linkedLessonSlug: 'math-foundations-si-algebra-trig',
         },
       ]);
     }
@@ -414,7 +556,25 @@ export async function getAllCurriculumData() {
       return a.orderIndex - b.orderIndex;
     });
 
-    const coverageReport = computeSyllabusCoverageReport(sortedLessons.map((l) => l.slug));
+    // Build quiz question count map by lessonId for multi-criteria coverage audit
+    const quizIdToLessonId = new Map<number, number>();
+    for (const qz of allQuizzes) {
+      quizIdToLessonId.set(qz.id, qz.lessonId);
+    }
+    const questionCountByLessonId = new Map<number, number>();
+    for (const q of allQuestions) {
+      const lId = quizIdToLessonId.get(q.quizId);
+      if (lId !== undefined) {
+        questionCountByLessonId.set(lId, (questionCountByLessonId.get(lId) ?? 0) + 1);
+      }
+    }
+
+    const lessonsWithQuestionCounts = sortedLessons.map((l) => ({
+      ...l,
+      questionCount: questionCountByLessonId.get(l.id) ?? 0,
+    }));
+
+    const coverageReport = computeSyllabusCoverageReport(lessonsWithQuestionCounts);
 
     return {
       courses: sortedCourses,
@@ -474,6 +634,7 @@ export async function getUserDashboardState(uid: string) {
       notes: userNts,
       unlockedAchievements: unlockedAch,
       enrollments: userEnrollments,
+      enrolledCourseIds: Array.from(new Set(userEnrollments.map((e) => e.courseId))),
     };
   } catch (error) {
     console.error('Database query failed in getUserDashboardState:', error);
@@ -510,13 +671,10 @@ export async function evaluateAndUnlockAchievements(uid: string) {
           .onConflictDoNothing()
           .returning();
         if (inserted.length > 0) {
-          const [u] = await db.select().from(users).where(eq(users.uid, uid));
-          if (u) {
-            await db
-              .update(users)
-              .set({ xp: u.xp + xpBonus })
-              .where(eq(users.uid, uid));
-          }
+          await db
+            .update(users)
+            .set({ xp: sql`${users.xp} + ${xpBonus}` })
+            .where(eq(users.uid, uid));
           newlyUnlocked.push(code);
         }
       }
@@ -535,10 +693,14 @@ export async function evaluateAndUnlockAchievements(uid: string) {
       await award('TASK_DISCIPLINE', 150);
     }
 
-    // Check binary lesson completion
+    // Check binary / digital logic lesson completion
     const allLessons = await db.select().from(lessons);
-    const binaryLesson = allLessons.find((l) => l.slug === 'how-binary-and-logic-gates-work');
-    if (binaryLesson && progressRows.some((p) => p.lessonId === binaryLesson.id)) {
+    const binaryLessons = allLessons.filter(
+      (l) =>
+        l.slug === 'digital-logic-binary-karnaugh-combinational' ||
+        l.slug === 'how-binary-and-logic-gates-work'
+    );
+    if (binaryLessons.some((bl) => progressRows.some((p) => p.lessonId === bl.id))) {
       await award('BINARY_MASTER', 250);
     }
 
@@ -622,66 +784,209 @@ export async function deleteTaskForUser(uid: string, taskId: number) {
   }
 }
 
-export async function markLessonComplete(uid: string, lessonId: number, timeSpentMinutes = 10) {
+export async function enrollUserInCourse(uid: string, courseId: number) {
   try {
-    // Phase 3.5: Validate lesson existence and publication status before recording progress
-    const [targetLesson] = await db.select().from(lessons).where(eq(lessons.id, lessonId));
-    if (!targetLesson) {
-      throw new AppValidationError('Lesson not found.', 404);
+    const [targetCourse] = await db.select().from(courses).where(eq(courses.id, courseId));
+    if (!targetCourse) {
+      throw new AppValidationError('Course not found.', 404);
     }
-    if (!targetLesson.published) {
-      throw new AppValidationError('Cannot record progress on an unpublished lesson.', 400);
+    if (!targetCourse.published) {
+      throw new AppValidationError('Cannot enroll in an unpublished course.', 400);
     }
 
-    // Phase 3.4: Check if lesson was already completed by this user to prevent duplicate XP farming
-    const [existingProgress] = await db
+    const existing = await db
       .select()
-      .from(lessonProgress)
-      .where(and(eq(lessonProgress.userUid, uid), eq(lessonProgress.lessonId, lessonId)));
+      .from(enrollments)
+      .where(and(eq(enrollments.userUid, uid), eq(enrollments.courseId, courseId)));
 
-    const alreadyCompleted = Boolean(existingProgress?.completed);
+    if (existing.length > 0) {
+      return { enrollment: existing[0], alreadyEnrolled: true, course: targetCourse };
+    }
 
-    const [progress] = await db
-      .insert(lessonProgress)
+    const [created] = await db
+      .insert(enrollments)
       .values({
         userUid: uid,
-        lessonId,
-        completed: true,
-        timeSpentMinutes,
+        courseId,
       })
-      .onConflictDoUpdate({
-        target: [lessonProgress.userUid, lessonProgress.lessonId],
-        set: {
-          completed: true,
-          timeSpentMinutes: existingProgress
-            ? Math.max(existingProgress.timeSpentMinutes, timeSpentMinutes)
-            : timeSpentMinutes,
-          completedAt: existingProgress?.completedAt || new Date(),
-        },
-      })
+      .onConflictDoNothing()
       .returning();
 
-    let xpAwarded = 0;
-    if (!alreadyCompleted) {
-      xpAwarded = 50;
-      const [u] = await db.select().from(users).where(eq(users.uid, uid));
+    const [finalRow] = created
+      ? [created]
+      : await db
+          .select()
+          .from(enrollments)
+          .where(and(eq(enrollments.userUid, uid), eq(enrollments.courseId, courseId)));
+
+    return { enrollment: finalRow, alreadyEnrolled: false, course: targetCourse };
+  } catch (error) {
+    if (error instanceof AppValidationError) throw error;
+    console.error('Database query failed in enrollUserInCourse:', error);
+    throw new Error('Failed to enroll in course.', { cause: error });
+  }
+}
+
+export async function checkLessonPrerequisitesMet(uid: string, lessonId: number): Promise<{
+  met: boolean;
+  missingLessons: Array<{ id: number; slug: string; titleEn: string }>;
+}> {
+  const [targetLesson] = await db.select().from(lessons).where(eq(lessons.id, lessonId));
+  if (!targetLesson) {
+    throw new AppValidationError('Lesson not found.', 404);
+  }
+
+  const courseLessons = await db
+    .select()
+    .from(lessons)
+    .where(and(eq(lessons.courseId, targetLesson.courseId), eq(lessons.published, true)));
+
+  const priorInCourse = courseLessons
+    .filter((l) => l.orderIndex < targetLesson.orderIndex)
+    .sort((a, b) => a.orderIndex - b.orderIndex);
+
+  if (priorInCourse.length === 0) {
+    return { met: true, missingLessons: [] };
+  }
+
+  const userProg = await db
+    .select()
+    .from(lessonProgress)
+    .where(and(eq(lessonProgress.userUid, uid), eq(lessonProgress.completed, true)));
+  const completedIds = new Set(userProg.map((p) => p.lessonId));
+
+  const missingLessons = priorInCourse
+    .filter((l) => !completedIds.has(l.id))
+    .map((l) => ({ id: l.id, slug: l.slug, titleEn: l.titleEn }));
+
+  return {
+    met: missingLessons.length === 0,
+    missingLessons,
+  };
+}
+
+export async function markLessonComplete(
+  uid: string,
+  lessonId: number,
+  timeSpentMinutes = 10,
+  options?: { enforcePrerequisites?: boolean; activeInteractionSeconds?: number }
+) {
+  try {
+    const txResult = await db.transaction(async (tx) => {
+      // Lock the user row to serialize concurrent lesson completions for the same user
+      await tx.execute(sql`SELECT uid FROM users WHERE uid = ${uid} FOR UPDATE`);
+
+      // Phase 3.5: Validate lesson existence and publication status before recording progress
+      const [targetLesson] = await tx.select().from(lessons).where(eq(lessons.id, lessonId));
+      if (!targetLesson) {
+        throw new AppValidationError('Lesson not found.', 404);
+      }
+      if (!targetLesson.published) {
+        throw new AppValidationError('Cannot record progress on an unpublished lesson.', 400);
+      }
+
+      if (options?.enforcePrerequisites) {
+        const courseLessons = await tx
+          .select()
+          .from(lessons)
+          .where(and(eq(lessons.courseId, targetLesson.courseId), eq(lessons.published, true)));
+        const priorInCourse = courseLessons.filter((l) => l.orderIndex < targetLesson.orderIndex);
+        if (priorInCourse.length > 0) {
+          const userProg = await tx
+            .select()
+            .from(lessonProgress)
+            .where(and(eq(lessonProgress.userUid, uid), eq(lessonProgress.completed, true)));
+          const completedIds = new Set(userProg.map((p) => p.lessonId));
+          const missing = priorInCourse.filter((l) => !completedIds.has(l.id));
+          if (missing.length > 0) {
+            throw new AppValidationError(
+              `Prerequisite lesson required first: "${missing[0].titleEn}" (${missing[0].slug}).`,
+              400
+            );
+          }
+        }
+      }
+
+      // Ensure user is enrolled in the parent course
+      await tx
+        .insert(enrollments)
+        .values({
+          userUid: uid,
+          courseId: targetLesson.courseId,
+        })
+        .onConflictDoNothing();
+
+      // Phase 3.4: Check if lesson was already completed by this user inside the locked transaction
+      const [existingProgress] = await tx
+        .select()
+        .from(lessonProgress)
+        .where(and(eq(lessonProgress.userUid, uid), eq(lessonProgress.lessonId, lessonId)));
+
+      const alreadyCompleted = Boolean(existingProgress?.completed);
+      const boundedMinutes = Math.max(1, Math.min(240, Math.round(timeSpentMinutes)));
+
+      const [progress] = await tx
+        .insert(lessonProgress)
+        .values({
+          userUid: uid,
+          lessonId,
+          completed: true,
+          timeSpentMinutes: boundedMinutes,
+        })
+        .onConflictDoUpdate({
+          target: [lessonProgress.userUid, lessonProgress.lessonId],
+          set: {
+            completed: true,
+            timeSpentMinutes: existingProgress
+              ? Math.max(existingProgress.timeSpentMinutes, boundedMinutes)
+              : boundedMinutes,
+            completedAt: existingProgress?.completedAt || new Date(),
+          },
+        })
+        .returning();
+
+      let xpAwarded = 0;
+      const [u] = await tx.select().from(users).where(eq(users.uid, uid));
       if (u) {
-        await db
+        const { todayStr, streakDays } = computeUpdatedStreak(u.lastActiveDate, u.streakDays);
+        if (!alreadyCompleted) {
+          xpAwarded = 50;
+        }
+        await tx
           .update(users)
-          .set({ xp: u.xp + xpAwarded })
+          .set({
+            xp: u.xp + xpAwarded,
+            streakDays,
+            lastActiveDate: todayStr,
+          })
           .where(eq(users.uid, uid));
       }
-    }
+
+      // Ensure the user is enrolled in this course upon completing a lesson
+      const existingEnrollment = await tx
+        .select()
+        .from(enrollments)
+        .where(and(eq(enrollments.userUid, uid), eq(enrollments.courseId, targetLesson.courseId)));
+      if (existingEnrollment.length === 0) {
+        await tx.insert(enrollments).values({
+          userUid: uid,
+          courseId: targetLesson.courseId,
+        });
+      }
+
+      return { progress, xpAwarded, alreadyCompleted };
+    });
 
     const newlyUnlocked = await evaluateAndUnlockAchievements(uid);
     const [updatedUser] = await db.select().from(users).where(eq(users.uid, uid));
 
     return {
-      progress,
-      xpAwarded,
-      xpEarned: xpAwarded,
-      alreadyCompleted,
+      progress: txResult.progress,
+      xpAwarded: txResult.xpAwarded,
+      xpEarned: txResult.xpAwarded,
+      alreadyCompleted: txResult.alreadyCompleted,
       userXp: updatedUser?.xp ?? 0,
+      streakDays: updatedUser?.streakDays ?? 1,
       newlyUnlocked,
     };
   } catch (error) {
@@ -760,177 +1065,201 @@ export async function submitQuizAttemptServerSide(
   sessionId?: number
 ) {
   try {
-    const [quiz] = await db.select().from(quizzes).where(eq(quizzes.id, quizId));
-    if (!quiz) {
-      throw new AppValidationError('Quiz not found.', 404);
-    }
+    const txResult = await db.transaction(async (tx) => {
+      // Lock the user row to serialize concurrent quiz submissions & XP awards for the same user
+      await tx.execute(sql`SELECT uid FROM users WHERE uid = ${uid} FOR UPDATE`);
 
-    const quizQuestions = await db
-      .select()
-      .from(questions)
-      .where(eq(questions.quizId, quizId));
+      const [quiz] = await tx.select().from(quizzes).where(eq(quizzes.id, quizId));
+      if (!quiz) {
+        throw new AppValidationError('Quiz not found.', 404);
+      }
 
-    if (quizQuestions.length === 0) {
-      throw new AppValidationError('Quiz has no questions.', 400);
-    }
-
-    // Phase 3.1: Enforce server-side quiz deadlines & single-submission session rules
-    let timeTakenSeconds = 0;
-    const now = new Date();
-
-    if (sessionId !== undefined) {
-      const [session] = await db
+      const quizQuestions = await tx
         .select()
-        .from(quizSessions)
-        .where(
-          and(
-            eq(quizSessions.id, sessionId),
-            eq(quizSessions.userUid, uid),
-            eq(quizSessions.quizId, quizId)
+        .from(questions)
+        .where(eq(questions.quizId, quizId));
+
+      if (quizQuestions.length === 0) {
+        throw new AppValidationError('Quiz has no questions.', 400);
+      }
+
+      // Phase 3.1: Enforce server-side quiz deadlines, mode consistency & single-submission session rules
+      let timeTakenSeconds = 0;
+      const now = new Date();
+
+      if (sessionId !== undefined) {
+        const [session] = await tx
+          .select()
+          .from(quizSessions)
+          .where(
+            and(
+              eq(quizSessions.id, sessionId),
+              eq(quizSessions.userUid, uid),
+              eq(quizSessions.quizId, quizId)
+            )
+          );
+        if (!session) {
+          throw new AppValidationError('Invalid or unauthorized quiz session.', 400);
+        }
+        if (session.mode !== mode) {
+          throw new AppValidationError(
+            `Quiz session mode mismatch: session was started in '${session.mode}' mode, cannot submit in '${mode}' mode.`,
+            400
+          );
+        }
+        if (session.submittedAt !== null) {
+          throw new AppValidationError('This quiz session has already been submitted.', 400);
+        }
+        timeTakenSeconds = Math.max(
+          1,
+          Math.round((now.getTime() - new Date(session.startedAt).getTime()) / 1000)
+        );
+        if (mode === 'timed' && now.getTime() > new Date(session.expiresAt).getTime()) {
+          throw new AppValidationError(
+            `Quiz deadline exceeded (${quiz.timeLimitSeconds} seconds time limit).`,
+            400
+          );
+        }
+        const updatedSessions = await tx
+          .update(quizSessions)
+          .set({ submittedAt: now })
+          .where(and(eq(quizSessions.id, session.id), sql`${quizSessions.submittedAt} IS NULL`))
+          .returning();
+        if (updatedSessions.length === 0) {
+          throw new AppValidationError('This quiz session has already been submitted.', 400);
+        }
+      } else if (mode === 'timed') {
+        // Find latest unsubmitted timed session for this user & quiz
+        const activeSessions = await tx
+          .select()
+          .from(quizSessions)
+          .where(
+            and(
+              eq(quizSessions.userUid, uid),
+              eq(quizSessions.quizId, quizId),
+              eq(quizSessions.mode, 'timed')
+            )
           )
+          .orderBy(desc(quizSessions.startedAt));
+
+        const latestOpen = activeSessions.find((s) => s.submittedAt === null);
+        if (!latestOpen) {
+          throw new AppValidationError(
+            'Timed quiz requires an active server-started session. Please start the timed quiz first.',
+            400
+          );
+        }
+        timeTakenSeconds = Math.max(
+          1,
+          Math.round((now.getTime() - new Date(latestOpen.startedAt).getTime()) / 1000)
         );
-      if (!session) {
-        throw new AppValidationError('Invalid or unauthorized quiz session.', 400);
+        if (now.getTime() > new Date(latestOpen.expiresAt).getTime()) {
+          throw new AppValidationError(
+            `Quiz deadline exceeded (${quiz.timeLimitSeconds} seconds time limit).`,
+            400
+          );
+        }
+        const updatedSessions = await tx
+          .update(quizSessions)
+          .set({ submittedAt: now })
+          .where(and(eq(quizSessions.id, latestOpen.id), sql`${quizSessions.submittedAt} IS NULL`))
+          .returning();
+        if (updatedSessions.length === 0) {
+          throw new AppValidationError('This quiz session has already been submitted.', 400);
+        }
       }
-      if (session.submittedAt !== null) {
-        throw new AppValidationError('This quiz session has already been submitted.', 400);
+
+      // Phase 3.3: Authoritative server-side grading (returns explanations ONLY after submission)
+      let correctCount = 0;
+      const gradedAnswers: Array<{
+        questionId: number;
+        submitted: string;
+        isCorrect: boolean;
+        topicTag: string;
+        correctAnswer: string;
+        explanationEn: string;
+        explanationPa: string;
+      }> = [];
+
+      for (const q of quizQuestions) {
+        const rawSubmitted = (submittedAnswers[String(q.id)] || '').trim();
+        const isCorrect = rawSubmitted.toLowerCase() === q.correctAnswer.trim().toLowerCase();
+        if (isCorrect) correctCount++;
+        gradedAnswers.push({
+          questionId: q.id,
+          submitted: rawSubmitted,
+          isCorrect,
+          topicTag: q.topicTag,
+          correctAnswer: q.correctAnswer,
+          explanationEn: q.explanationEn,
+          explanationPa: q.explanationPa,
+        });
       }
-      timeTakenSeconds = Math.max(
-        1,
-        Math.round((now.getTime() - new Date(session.startedAt).getTime()) / 1000)
-      );
-      if (mode === 'timed' && now.getTime() > new Date(session.expiresAt).getTime()) {
-        throw new AppValidationError(
-          `Quiz deadline exceeded (${quiz.timeLimitSeconds} seconds time limit).`,
-          400
-        );
-      }
-      await db
-        .update(quizSessions)
-        .set({ submittedAt: now })
-        .where(eq(quizSessions.id, session.id));
-    } else if (mode === 'timed') {
-      // Find latest unsubmitted timed session for this user & quiz
-      const activeSessions = await db
+
+      const totalQuestions = quizQuestions.length;
+      const scorePercent = Math.round((correctCount / totalQuestions) * 100);
+      // Phase 3.2: Use configured passingScorePercent for the quiz
+      const passed = scorePercent >= quiz.passingScorePercent;
+
+      // Phase 3.4: Prevent unintended quiz XP farming by checking prior attempts inside transaction
+      const priorAttempts = await tx
         .select()
-        .from(quizSessions)
-        .where(
-          and(
-            eq(quizSessions.userUid, uid),
-            eq(quizSessions.quizId, quizId),
-            eq(quizSessions.mode, 'timed')
-          )
-        )
-        .orderBy(desc(quizSessions.startedAt));
+        .from(quizAttempts)
+        .where(and(eq(quizAttempts.userUid, uid), eq(quizAttempts.quizId, quizId)));
 
-      const latestOpen = activeSessions.find((s) => s.submittedAt === null);
-      if (!latestOpen) {
-        throw new AppValidationError(
-          'Timed quiz requires an active server-started session. Please start the timed quiz first.',
-          400
-        );
+      const hadPassedBefore = priorAttempts.some((a) => a.passed);
+      const hadAttemptedBefore = priorAttempts.length > 0;
+
+      let xpAwarded = 0;
+      if (!hadPassedBefore) {
+        if (passed && !hadAttemptedBefore) {
+          xpAwarded = 100;
+        } else if (passed && hadAttemptedBefore) {
+          xpAwarded = 75; // Awarded 25 on first try, now awards remaining 75 upon passing
+        } else if (!passed && !hadAttemptedBefore) {
+          xpAwarded = 25;
+        }
       }
-      timeTakenSeconds = Math.max(
-        1,
-        Math.round((now.getTime() - new Date(latestOpen.startedAt).getTime()) / 1000)
-      );
-      if (now.getTime() > new Date(latestOpen.expiresAt).getTime()) {
-        throw new AppValidationError(
-          `Quiz deadline exceeded (${quiz.timeLimitSeconds} seconds time limit).`,
-          400
-        );
-      }
-      await db
-        .update(quizSessions)
-        .set({ submittedAt: now })
-        .where(eq(quizSessions.id, latestOpen.id));
-    }
 
-    // Phase 3.3: Authoritative server-side grading (returns explanations ONLY after submission)
-    let correctCount = 0;
-    const gradedAnswers: Array<{
-      questionId: number;
-      submitted: string;
-      isCorrect: boolean;
-      topicTag: string;
-      correctAnswer: string;
-      explanationEn: string;
-      explanationPa: string;
-    }> = [];
+      const [attempt] = await tx
+        .insert(quizAttempts)
+        .values({
+          userUid: uid,
+          quizId,
+          scorePercent,
+          correctCount,
+          totalQuestions,
+          passed,
+          mode,
+          timeTakenSeconds,
+          answersJson: gradedAnswers,
+        })
+        .returning();
 
-    for (const q of quizQuestions) {
-      const rawSubmitted = (submittedAnswers[String(q.id)] || '').trim();
-      const isCorrect = rawSubmitted.toLowerCase() === q.correctAnswer.trim().toLowerCase();
-      if (isCorrect) correctCount++;
-      gradedAnswers.push({
-        questionId: q.id,
-        submitted: rawSubmitted,
-        isCorrect,
-        topicTag: q.topicTag,
-        correctAnswer: q.correctAnswer,
-        explanationEn: q.explanationEn,
-        explanationPa: q.explanationPa,
-      });
-    }
-
-    const totalQuestions = quizQuestions.length;
-    const scorePercent = Math.round((correctCount / totalQuestions) * 100);
-    // Phase 3.2: Use configured passingScorePercent for the quiz
-    const passed = scorePercent >= quiz.passingScorePercent;
-
-    // Phase 3.4: Prevent unintended quiz XP farming by checking prior attempts
-    const priorAttempts = await db
-      .select()
-      .from(quizAttempts)
-      .where(and(eq(quizAttempts.userUid, uid), eq(quizAttempts.quizId, quizId)));
-
-    const hadPassedBefore = priorAttempts.some((a) => a.passed);
-    const hadAttemptedBefore = priorAttempts.length > 0;
-
-    let xpAwarded = 0;
-    if (!hadPassedBefore) {
-      if (passed && !hadAttemptedBefore) {
-        xpAwarded = 100;
-      } else if (passed && hadAttemptedBefore) {
-        xpAwarded = 75; // Awarded 25 on first try, now awards remaining 75 upon passing
-      } else if (!passed && !hadAttemptedBefore) {
-        xpAwarded = 25;
-      }
-    }
-
-    const [attempt] = await db
-      .insert(quizAttempts)
-      .values({
-        userUid: uid,
-        quizId,
-        scorePercent,
-        correctCount,
-        totalQuestions,
-        passed,
-        mode,
-        timeTakenSeconds,
-        answersJson: gradedAnswers,
-      })
-      .returning();
-
-    if (xpAwarded > 0) {
-      const [u] = await db.select().from(users).where(eq(users.uid, uid));
+      const [u] = await tx.select().from(users).where(eq(users.uid, uid));
       if (u) {
-        await db
+        const { todayStr, streakDays } = computeUpdatedStreak(u.lastActiveDate, u.streakDays);
+        await tx
           .update(users)
-          .set({ xp: u.xp + xpAwarded })
+          .set({
+            xp: u.xp + xpAwarded,
+            streakDays,
+            lastActiveDate: todayStr,
+          })
           .where(eq(users.uid, uid));
       }
-    }
+
+      return { attempt, xpAwarded, passingScorePercent: quiz.passingScorePercent };
+    });
 
     const newlyUnlocked = await evaluateAndUnlockAchievements(uid);
     const [updatedUser] = await db.select().from(users).where(eq(users.uid, uid));
 
     return {
-      attempt,
-      xpAwarded,
-      xpEarned: xpAwarded,
-      passingScorePercent: quiz.passingScorePercent,
+      attempt: txResult.attempt,
+      xpAwarded: txResult.xpAwarded,
+      xpEarned: txResult.xpAwarded,
+      passingScorePercent: txResult.passingScorePercent,
       userXp: updatedUser?.xp ?? 0,
       newlyUnlocked,
     };
@@ -1140,17 +1469,65 @@ export async function upsertLessonInSyllabus(payload: {
   }
 }
 
-export async function countRecentUserTutorMessages(uid: string, sinceMs = 24 * 3600 * 1000): Promise<number> {
+const inFlightTutorRequests = new Map<string, number>();
+
+export async function countRecentUserTutorMessages(
+  uid: string,
+  sinceMs = 24 * 3600 * 1000
+): Promise<number> {
+  // Normalize window: if caller passes <= 168 (hours), convert to milliseconds; otherwise treat as ms
+  const windowMs = sinceMs <= 168 ? sinceMs * 3600 * 1000 : sinceMs;
+  const cutoffDate = new Date(Date.now() - windowMs);
   try {
     const history = await db
       .select()
       .from(tutorMessages)
-      .where(and(eq(tutorMessages.userUid, uid), eq(tutorMessages.role, 'user')));
-    const cutoff = Date.now() - sinceMs;
-    return history.filter((m) => new Date(m.createdAt).getTime() >= cutoff).length;
-  } catch {
-    return 0;
+      .where(
+        and(
+          eq(tutorMessages.userUid, uid),
+          eq(tutorMessages.role, 'user'),
+          gte(tutorMessages.createdAt, cutoffDate)
+        )
+      );
+    const inFlight = inFlightTutorRequests.get(uid) ?? 0;
+    return history.length + inFlight;
+  } catch (error) {
+    console.error('Database query failed in countRecentUserTutorMessages:', error);
+    throw new AppValidationError(
+      'Unable to verify AI Tutor daily usage quota due to a database error.',
+      503
+    );
   }
+}
+
+export async function reserveTutorQuotaSlot(
+  uid: string,
+  maxDailyQuota: number,
+  windowMs = 24 * 3600 * 1000
+): Promise<{ usedToday: number; release: () => void }> {
+  const usedToday = await countRecentUserTutorMessages(uid, windowMs);
+  if (usedToday >= maxDailyQuota) {
+    throw new AppValidationError(
+      `Daily AI Tutor quota reached (${maxDailyQuota} questions per 24 hours). Please continue tomorrow.`,
+      429
+    );
+  }
+  const currentInFlight = inFlightTutorRequests.get(uid) ?? 0;
+  inFlightTutorRequests.set(uid, currentInFlight + 1);
+  let released = false;
+  return {
+    usedToday,
+    release: () => {
+      if (released) return;
+      released = true;
+      const active = inFlightTutorRequests.get(uid) ?? 1;
+      if (active <= 1) {
+        inFlightTutorRequests.delete(uid);
+      } else {
+        inFlightTutorRequests.set(uid, active - 1);
+      }
+    },
+  };
 }
 
 export async function saveTutorConversationMessage(

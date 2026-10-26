@@ -278,10 +278,244 @@ export const LEVEL_LESSON_TOPIC_MAPPING: Record<number, { lessonSlugs: string[];
   },
 };
 
-export function computeSyllabusCoverageReport(activeLessonSlugs: string[]) {
-  const slugSet = new Set(activeLessonSlugs);
+import { LEVEL_0_COURSE } from './level0.ts';
+import { LEVEL_1_COURSE } from './level1.ts';
+import { LEVEL_2_COURSE } from './level2.ts';
+import { LEVEL_3_COURSE } from './level3.ts';
+import { LEVEL_4_COURSE } from './level4.ts';
+import { LEVEL_5_COURSE } from './level5.ts';
+import { LEVEL_6_COURSE } from './level6.ts';
+import { LEVEL_7_COURSE } from './level7.ts';
+import { LEVEL_8_COURSE } from './level8.ts';
+import { LEVEL_9_COURSE } from './level9.ts';
+import { LEVEL_10_COURSE } from './level10.ts';
+import { LEVEL_11_COURSE } from './level11.ts';
+import { LEVEL_12_COURSE } from './level12.ts';
+
+const ALL_SEED_COURSES = [
+  LEVEL_0_COURSE,
+  LEVEL_1_COURSE,
+  LEVEL_2_COURSE,
+  LEVEL_3_COURSE,
+  LEVEL_4_COURSE,
+  LEVEL_5_COURSE,
+  LEVEL_6_COURSE,
+  LEVEL_7_COURSE,
+  LEVEL_8_COURSE,
+  LEVEL_9_COURSE,
+  LEVEL_10_COURSE,
+  LEVEL_11_COURSE,
+  LEVEL_12_COURSE,
+];
+
+export const VALID_CURRICULUM_LAB_IDS = new Set([
+  'hardware-explorer',
+  'cpu-cycle',
+  'cpu-simulator',
+  'ram-storage',
+  'binary-converter',
+  'number-converter',
+  'logic-gates',
+  'binary-logic',
+  'network-sim',
+  'algorithm-math-lab',
+  'sorting-visualizer',
+  'discrete-math',
+  'resistor-calc',
+  'transistor-switch',
+  'multimeter-lab',
+  'lab-power-rail-short-finder',
+  'lab-pad-trace-repair-simulator',
+]);
+
+export type SubtopicAuditStatus =
+  | 'NOT_STARTED'
+  | 'MAPPED_ONLY'
+  | 'SKELETON_ONLY'
+  | 'PARTIAL_BILINGUAL'
+  | 'SUBSTANTIVE_DRAFT'
+  | 'EXERCISES_ADDED'
+  | 'QUIZ_ADDED'
+  | 'FULLY_VERIFIED';
+
+export interface AuditableLessonRecord {
+  slug: string;
+  titleEn?: string;
+  titlePa?: string;
+  objectivesJson?: string[];
+  prerequisitesJson?: string[];
+  childAnalogyEn?: string;
+  childAnalogyPa?: string;
+  technicalExplanationEn?: string;
+  technicalExplanationPa?: string;
+  practicalExampleEn?: string;
+  practicalExamplePa?: string;
+  codeDemo?: string;
+  misconceptionsJson?: Array<{ myth: string; truthEn: string; truthPa: string }>;
+  terminologyJson?: Array<{ term: string; punjabi: string; meaningEn: string; meaningPa: string }>;
+  interactiveLabId?: string;
+  exercisePromptEn?: string;
+  exercisePromptPa?: string;
+  summaryEn?: string;
+  summaryPa?: string;
+  furtherReadingJson?: string[];
+  questionCount?: number;
+  quiz?: {
+    questions?: Array<{
+      promptEn: string;
+      promptPa: string;
+      optionsJson: string[];
+      correctAnswer: string;
+      explanationEn: string;
+      explanationPa: string;
+    }>;
+  };
+}
+
+const GURMUKHI_SCRIPT_REGEX = /[\u0A00-\u0A7F]/;
+
+function buildSeedLessonLookup(): Map<string, AuditableLessonRecord> {
+  const map = new Map<string, AuditableLessonRecord>();
+  for (const c of ALL_SEED_COURSES) {
+    for (const m of c.modules) {
+      for (const l of m.lessons) {
+        map.set(l.slug, {
+          ...l,
+          questionCount: l.quiz?.questions?.length ?? 0,
+        });
+      }
+    }
+  }
+  return map;
+}
+
+export function auditLessonContentQuality(lesson: AuditableLessonRecord | undefined) {
+  if (!lesson) {
+    return {
+      auditStatus: 'NOT_STARTED' as SubtopicAuditStatus,
+      legacyStatus: 'missing' as const,
+      checks: {
+        mapped: false,
+        bilingualGurmukhi: false,
+        englishDepth: false,
+        mathAndWorkedExample: false,
+        codeAndSimulation: false,
+        exercisesPresent: false,
+        quizVerified: false,
+        labResolved: false,
+      },
+    };
+  }
+
+  const techEn = (lesson.technicalExplanationEn || '').trim();
+  const techPa = (lesson.technicalExplanationPa || '').trim();
+  const analogyEn = (lesson.childAnalogyEn || '').trim();
+  const analogyPa = (lesson.childAnalogyPa || '').trim();
+  const pracEn = (lesson.practicalExampleEn || '').trim();
+  const pracPa = (lesson.practicalExamplePa || '').trim();
+  const code = (lesson.codeDemo || '').trim();
+  const exEn = (lesson.exercisePromptEn || '').trim();
+  const exPa = (lesson.exercisePromptPa || '').trim();
+  const qCount = lesson.questionCount ?? lesson.quiz?.questions?.length ?? 0;
+
+  const englishDepth = techEn.length >= 120 && analogyEn.length >= 30;
+  const bilingualGurmukhi =
+    techPa.length >= 80 &&
+    analogyPa.length >= 25 &&
+    GURMUKHI_SCRIPT_REGEX.test(techPa) &&
+    GURMUKHI_SCRIPT_REGEX.test(analogyPa);
+
+  const mathAndWorkedExample =
+    pracEn.length >= 40 &&
+    pracPa.length >= 25 &&
+    GURMUKHI_SCRIPT_REGEX.test(pracPa) &&
+    /[=*/+\-^0-9]/.test(`${techEn} ${pracEn} ${code}`);
+
+  const codeAndSimulation = code.length >= 30;
+  const exercisesPresent =
+    exEn.length >= 20 && exPa.length >= 15 && GURMUKHI_SCRIPT_REGEX.test(exPa);
+  const quizVerified = qCount >= 10;
+  const labResolved = VALID_CURRICULUM_LAB_IDS.has(lesson.interactiveLabId || '');
+  const termsAndMyths =
+    (lesson.terminologyJson?.length ?? 0) >= 2 &&
+    (lesson.misconceptionsJson?.length ?? 0) >= 2;
+
+  let auditStatus: SubtopicAuditStatus = 'MAPPED_ONLY';
+  if (!englishDepth && !bilingualGurmukhi) {
+    auditStatus = 'SKELETON_ONLY';
+  } else if (englishDepth && !bilingualGurmukhi) {
+    auditStatus = 'PARTIAL_BILINGUAL';
+  } else if (englishDepth && bilingualGurmukhi && (!mathAndWorkedExample || !termsAndMyths)) {
+    auditStatus = 'SUBSTANTIVE_DRAFT';
+  } else if (englishDepth && bilingualGurmukhi && mathAndWorkedExample && exercisesPresent && !quizVerified) {
+    auditStatus = 'EXERCISES_ADDED';
+  } else if (englishDepth && bilingualGurmukhi && mathAndWorkedExample && exercisesPresent && quizVerified && !labResolved) {
+    auditStatus = 'QUIZ_ADDED';
+  } else if (
+    englishDepth &&
+    bilingualGurmukhi &&
+    mathAndWorkedExample &&
+    codeAndSimulation &&
+    exercisesPresent &&
+    quizVerified &&
+    labResolved &&
+    termsAndMyths
+  ) {
+    auditStatus = 'FULLY_VERIFIED';
+  } else {
+    auditStatus = 'SUBSTANTIVE_DRAFT';
+  }
+
+  const legacyStatus =
+    auditStatus === 'FULLY_VERIFIED' ? ('complete' as const) : ('partial' as const);
+
+  return {
+    auditStatus,
+    legacyStatus,
+    checks: {
+      mapped: true,
+      bilingualGurmukhi,
+      englishDepth,
+      mathAndWorkedExample,
+      codeAndSimulation,
+      exercisesPresent,
+      quizVerified,
+      labResolved,
+    },
+  };
+}
+
+export function computeSyllabusCoverageReport(
+  activeLessonsInput: Array<string | AuditableLessonRecord>
+) {
+  const seedLookup = buildSeedLessonLookup();
+  const lessonMap = new Map<string, AuditableLessonRecord>();
+
+  for (const item of activeLessonsInput) {
+    if (typeof item === 'string') {
+      const seedLesson = seedLookup.get(item);
+      if (seedLesson) {
+        lessonMap.set(item, seedLesson);
+      } else {
+        lessonMap.set(item, { slug: item });
+      }
+    } else if (item && typeof item === 'object' && item.slug) {
+      const seedFallback = seedLookup.get(item.slug);
+      lessonMap.set(item.slug, {
+        ...seedFallback,
+        ...item,
+        questionCount:
+          item.questionCount ??
+          item.quiz?.questions?.length ??
+          seedFallback?.questionCount ??
+          0,
+      });
+    }
+  }
+
   let totalTopics = 0;
   let coveredTopics = 0;
+  let partialTopics = 0;
 
   const levels = COMPLETE_SYLLABUS_BLUEPRINT.map((lvl) => {
     const mapping = LEVEL_LESSON_TOPIC_MAPPING[lvl.level];
@@ -291,17 +525,27 @@ export function computeSyllabusCoverageReport(activeLessonSlugs: string[]) {
         idx < (mapping?.cutoffTopicIndex ?? 5)
           ? mapping?.lessonSlugs[0]
           : mapping?.lessonSlugs[1] || mapping?.lessonSlugs[0];
-      const isCovered = Boolean(assignedSlug && slugSet.has(assignedSlug));
-      if (isCovered) coveredTopics++;
+
+      const lessonObj = assignedSlug ? lessonMap.get(assignedSlug) : undefined;
+      const quality = auditLessonContentQuality(lessonObj);
+
+      if (quality.legacyStatus === 'complete') {
+        coveredTopics++;
+      } else if (quality.legacyStatus === 'partial') {
+        partialTopics++;
+      }
+
       return {
         topic,
         lessonSlug: assignedSlug || null,
-        status: isCovered ? ('complete' as const) : ('missing' as const),
+        status: quality.legacyStatus,
+        auditStatus: quality.auditStatus,
+        checks: quality.checks,
       };
     });
 
     const levelCoveredCount = topicsReport.filter((t) => t.status === 'complete').length;
-    const authoredLessonCount = (mapping?.lessonSlugs || []).filter((s) => slugSet.has(s)).length;
+    const authoredLessonCount = (mapping?.lessonSlugs || []).filter((s) => lessonMap.has(s)).length;
     return {
       level: lvl.level,
       titleEn: lvl.titleEn,
@@ -313,7 +557,7 @@ export function computeSyllabusCoverageReport(activeLessonSlugs: string[]) {
       status:
         levelCoveredCount === lvl.topics.length
           ? ('complete' as const)
-          : levelCoveredCount > 0
+          : levelCoveredCount > 0 || topicsReport.some((t) => t.status === 'partial')
           ? ('partial' as const)
           : ('missing' as const),
       topics: topicsReport,
@@ -324,10 +568,116 @@ export function computeSyllabusCoverageReport(activeLessonSlugs: string[]) {
     totalLevels: COMPLETE_SYLLABUS_BLUEPRINT.length,
     totalTopics,
     coveredTopics,
+    partialTopics,
     totalBlueprintTopics: totalTopics,
     completeTopics: coveredTopics,
     uncoveredTopics: totalTopics - coveredTopics,
     coveragePercent: totalTopics > 0 ? Math.round((coveredTopics / totalTopics) * 100) : 0,
     levels,
+  };
+}
+
+export interface EnrichedGlossaryMeta {
+  symbol: string;
+  siUnit: string;
+  formula: string;
+  relatedComponents: string[];
+}
+
+export function enrichGlossaryTermMetadata(term: string, meaningEn: string): EnrichedGlossaryMeta {
+  const lower = `${term} ${meaningEn}`.toLowerCase();
+  if (lower.includes('ohm') || lower.includes('resistance') || lower.includes('resistor')) {
+    return {
+      symbol: 'R',
+      siUnit: 'Ohm (Ω)',
+      formula: 'R = V / I',
+      relatedComponents: ['Fixed Film Resistor', 'Potentiometer', 'NTC Thermistor', 'Kelvin Shunt'],
+    };
+  }
+  if (lower.includes('capacitance') || lower.includes('capacitor') || lower.includes('esr') || lower.includes('time constant')) {
+    return {
+      symbol: 'C / τ',
+      siUnit: 'Farad (F) / Second (s)',
+      formula: 'I = C · (dV/dt), τ = R · C',
+      relatedComponents: ['MLCC Ceramic Capacitor', 'Aluminum Electrolytic', 'RC Filter Network'],
+    };
+  }
+  if (lower.includes('induct') || lower.includes('flux') || lower.includes('transformer') || lower.includes('resonan')) {
+    return {
+      symbol: 'L / f₀',
+      siUnit: 'Henry (H) / Hertz (Hz)',
+      formula: 'V = L · (dI/dt), f₀ = 1 / (2π√(LC))',
+      relatedComponents: ['Toroidal Inductor', 'Buck Power Inductor', 'Step-Down Transformer'],
+    };
+  }
+  if (lower.includes('decibel') || lower.includes('gain') || lower.includes('cmrr') || lower.includes('snr')) {
+    return {
+      symbol: 'A_v / dB',
+      siUnit: 'Decibel (dB, dimensionless ratio)',
+      formula: 'A_p(dB) = 10·log₁₀(P_out/P_in), A_v(dB) = 20·log₁₀(V_out/V_in)',
+      relatedComponents: ['Operational Amplifier', 'BJT Gain Stage', 'Attenuator Network'],
+    };
+  }
+  if (lower.includes('voltage') || lower.includes('potential') || lower.includes('rms') || lower.includes('kvl')) {
+    return {
+      symbol: 'V',
+      siUnit: 'Volt (V = J/C)',
+      formula: 'V_rms = V_pk / √2, ∑V_loop = 0',
+      relatedComponents: ['DC Bench Supply', 'Voltage Divider', 'LDO Regulator', 'DMM Voltmeter'],
+    };
+  }
+  if (lower.includes('current') || lower.includes('kcl') || lower.includes('ampere')) {
+    return {
+      symbol: 'I',
+      siUnit: 'Ampere (A = C/s)',
+      formula: 'I = dQ/dt, ∑I_in = ∑I_out',
+      relatedComponents: ['Current Sense Shunt', 'Hall-Effect Sensor', 'Series Fuse'],
+    };
+  }
+  if (lower.includes('diode') || lower.includes('rectifier') || lower.includes('zener') || lower.includes('pn junction')) {
+    return {
+      symbol: 'I_D / V_F',
+      siUnit: 'Ampere (A) / Volt (V)',
+      formula: 'I_D = I_S · (e^(V_D / nV_T) - 1)',
+      relatedComponents: ['1N4148 Silicon Diode', 'SS34 Schottky Diode', 'Zener Clamp', 'TVS Diode'],
+    };
+  }
+  if (lower.includes('mosfet') || lower.includes('bjt') || lower.includes('transistor') || lower.includes('igbt')) {
+    return {
+      symbol: 'I_C / I_D / R_DS(on)',
+      siUnit: 'Ampere (A) / Milliohm (mΩ)',
+      formula: 'I_C = β·I_B, P_cond = I_D² · R_DS(on)',
+      relatedComponents: ['NPN 2N2222 BJT', 'Logic-Level N-MOSFET', 'Half-Bridge Gate Driver'],
+    };
+  }
+  if (lower.includes('binary') || lower.includes('boolean') || lower.includes('karnaugh') || lower.includes('flip-flop') || lower.includes('setup') || lower.includes('clock')) {
+    return {
+      symbol: 'Q / f_clk',
+      siUnit: 'Logic State (0/1) / Hertz (Hz)',
+      formula: 'T_clk ≥ t_cq + t_logic + t_setup',
+      relatedComponents: ['74HC00 NAND Gate', 'D Flip-Flop Register', 'ALU Adder'],
+    };
+  }
+  if (lower.includes('buck') || lower.includes('boost') || lower.includes('smps') || lower.includes('ldo') || lower.includes('thermal')) {
+    return {
+      symbol: 'η / D / T_J',
+      siUnit: 'Percent (%) / °C/W',
+      formula: 'V_out = D · V_in (Buck), T_J = T_A + P_D · θ_JA',
+      relatedComponents: ['Synchronous Buck IC', 'LDO Voltage Regulator', 'Extruded Heatsink'],
+    };
+  }
+  if (lower.includes('pcb') || lower.includes('trace') || lower.includes('impedance') || lower.includes('solder') || lower.includes('kelvin')) {
+    return {
+      symbol: 'Z₀ / R_trace',
+      siUnit: 'Ohm (Ω) / Milliohm (mΩ)',
+      formula: 'R = ρ · L / (W · t), Z₀ ≈ 87/√(ε_r+1.41) · ln(5.98H/(0.8W+T))',
+      relatedComponents: ['4-Layer FR-4 Stackup', '0402 Decoupling MLCC', '4-Wire Kelvin Probe'],
+    };
+  }
+  return {
+    symbol: 'λ / H(s)',
+    siUnit: 'SI Standard Engineering Unit',
+    formula: 'y(t) = H{x(t)}',
+    relatedComponents: ['Embedded Microcontroller', 'Precision Instrumentation Stage'],
   };
 }

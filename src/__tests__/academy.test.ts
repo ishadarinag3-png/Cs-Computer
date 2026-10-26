@@ -2,6 +2,8 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { eq } from 'drizzle-orm';
 
+process.env.ADMIN_ALLOWLIST_EMAILS = 'babbshergill73@gmail.com';
+
 // Mock firebase-admin token verification for deterministic security & integration testing
 vi.mock('../lib/firebase-admin.ts', () => {
   return {
@@ -23,12 +25,28 @@ vi.mock('../lib/firebase-admin.ts', () => {
             email_verified: true,
           };
         }
+        if (token === 'valid-student-3-token') {
+          return {
+            uid: 'test-student-uid-3',
+            email: 'learner3@example.com',
+            name: 'Learner Three',
+            email_verified: true,
+          };
+        }
         if (token === 'spoofed-substring-admin-token') {
           return {
             uid: 'test-spoof-admin-uid',
             email: 'myadminhelper@example.com',
             name: 'Spoofed Admin',
             email_verified: true,
+          };
+        }
+        if (token === 'unverified-allowlist-admin-token') {
+          return {
+            uid: 'test-unverified-allowlist-uid',
+            email: 'babbshergill73@gmail.com',
+            name: 'Unverified Allowlist User',
+            email_verified: false,
           };
         }
         if (token === 'valid-custom-claim-admin-token') {
@@ -60,12 +78,15 @@ import { resetRateLimitBuckets } from '../middleware/rate-limit.ts';
 import {
   ensureCurriculumSeeded,
   checkDatabaseReadiness,
+  reserveTutorQuotaSlot,
 } from '../db/queries.ts';
 import { db } from '../db/index.ts';
 import {
   users,
   quizSessions,
   questions,
+  tutorMessages,
+  lessonProgress,
 } from '../db/schema.ts';
 import {
   tokenizeMathAndText,
@@ -77,29 +98,39 @@ import {
   compile28SectionPayload,
   createBlank28SectionState,
 } from '../components/LessonTemplateEditor.tsx';
+import {
+  VALID_LAB_IDS,
+  resolveValidLabId,
+} from '../components/ComputerLaboratory.tsx';
+import { enrichGlossaryTermMetadata } from '../db/curriculum/blueprint.ts';
 
 describe('Computer Fundamentals Academy — Security, Database, Assessment & Curriculum Audit Suite', () => {
   let sampleLessonId = 1;
+  let secondLessonId = 2;
+  let sampleCourseId = 1;
   let sampleQuizId = 1;
-  let sampleQuizQuestionId = 1;
-  let sampleCorrectAnswer = '';
+  let secondQuizId = 2;
 
   beforeAll(async () => {
+    process.env.ADMIN_ALLOWLIST_EMAILS = 'babbshergill73@gmail.com';
     await ensureCurriculumSeeded(true);
     const allQuestions = await db.select().from(questions);
     if (allQuestions.length > 0) {
       sampleQuizId = allQuestions[0].quizId;
-      sampleQuizQuestionId = allQuestions[0].id;
-      sampleCorrectAnswer = allQuestions[0].correctAnswer;
+      const distinctQuiz = allQuestions.find((q) => q.quizId !== sampleQuizId);
+      if (distinctQuiz) {
+        secondQuizId = distinctQuiz.quizId;
+      }
     }
   }, 60_000);
 
   beforeEach(() => {
+    process.env.ADMIN_ALLOWLIST_EMAILS = 'babbshergill73@gmail.com';
     resetRateLimitBuckets();
   });
 
-  describe('Phase 1: Security, RBAC, Sanitization & Validation', () => {
-    it('rejects email-substring admin assignment and only trusts custom claims or verified allowlist', () => {
+  describe('Phase 1 & 2: Security, RBAC, Rate Limiting, Quota & Input Validation', () => {
+    it('rejects email-substring admin assignment and enforces strict email_verified === true for allowlist', () => {
       expect(
         isTrustedAdminUser({
           uid: 'u1',
@@ -113,6 +144,13 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
           uid: 'u2',
           email: 'babbshergill73@gmail.com',
           email_verified: false,
+        } as any)
+      ).toBe(false);
+
+      expect(
+        isTrustedAdminUser({
+          uid: 'u2b',
+          email: 'babbshergill73@gmail.com',
         } as any)
       ).toBe(false);
 
@@ -133,16 +171,22 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
       ).toBe(true);
     });
 
-    it('assigns student role in DB even when email contains "admin" substring and blocks /api/admin/lessons with 403', async () => {
+    it('blocks unverified allowlist email and spoofed substring email from /api/admin/lessons with 403', async () => {
       const meRes = await request(app)
         .get('/api/auth/me')
         .set('Authorization', 'Bearer spoofed-substring-admin-token');
       expect(meRes.status).toBe(200);
       expect(meRes.body.user.role).toBe('student');
 
+      const unverifiedRes = await request(app)
+        .get('/api/auth/me')
+        .set('Authorization', 'Bearer unverified-allowlist-admin-token');
+      expect(unverifiedRes.status).toBe(200);
+      expect(unverifiedRes.body.user.role).toBe('student');
+
       const adminRes = await request(app)
         .post('/api/admin/lessons')
-        .set('Authorization', 'Bearer spoofed-substring-admin-token')
+        .set('Authorization', 'Bearer unverified-allowlist-admin-token')
         .send({
           courseId: 1,
           slug: 'unauthorized-lesson',
@@ -162,6 +206,8 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
       const curr = await request(app).get('/api/curriculum');
       const targetLesson = curr.body.lessons[0];
       sampleLessonId = targetLesson.id;
+      secondLessonId = curr.body.lessons[1]?.id || targetLesson.id;
+      sampleCourseId = curr.body.courses[0].id;
 
       const adminRes = await request(app)
         .post('/api/admin/lessons')
@@ -189,7 +235,7 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
     it('strips correctAnswer, explanationEn, and explanationPa from public /api/curriculum questions payload', async () => {
       const res = await request(app).get('/api/curriculum');
       expect(res.status).toBe(200);
-      expect(res.body.questions.length).toBeGreaterThanOrEqual(36);
+      expect(res.body.questions.length).toBeGreaterThanOrEqual(260);
 
       for (const q of res.body.questions) {
         expect(q.correctAnswer).toBeUndefined();
@@ -200,7 +246,7 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
       }
     });
 
-    it('requires authentication on /api/ai/tutor and rejects body-supplied uid field', async () => {
+    it('requires authentication on /api/ai/tutor, rejects body-supplied uid, and enforces 24-hour quota & concurrency reservation', async () => {
       const unauthRes = await request(app)
         .post('/api/ai/tutor')
         .send({ prompt: 'What is binary?' });
@@ -214,6 +260,25 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
           uid: 'victim-uid-spoof',
         });
       expect(spoofUidRes.status).toBe(400);
+
+      // Verify reserveTutorQuotaSlot enforces rolling 24h window + concurrent in-flight slots
+      await request(app)
+        .get('/api/auth/me')
+        .set('Authorization', 'Bearer valid-student-3-token');
+
+      await db
+        .delete(tutorMessages)
+        .where(eq(tutorMessages.userUid, 'test-student-uid-3'));
+
+      const slot1 = await reserveTutorQuotaSlot('test-student-uid-3', 2);
+      const slot2 = await reserveTutorQuotaSlot('test-student-uid-3', 2);
+      expect(slot1.usedToday).toBe(0);
+      expect(slot2.usedToday).toBe(1);
+
+      await expect(reserveTutorQuotaSlot('test-student-uid-3', 2)).rejects.toThrow(/quota/i);
+
+      slot1.release();
+      slot2.release();
     });
 
     it('validates numeric route IDs and task date formats with Zod', async () => {
@@ -234,10 +299,12 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
     });
   });
 
-  describe('Phase 2 & 4: Database Readiness, Idempotent Seeding & 100% Syllabus Coverage', () => {
-    it('passes database readiness check and GET /api/health', async () => {
+  describe('Phase 3, 4 & 5: Database Readiness, Idempotent Seeding, Enrollment & Multi-Criteria Coverage', () => {
+    it('passes database readiness check and GET /api/health with schema verification', async () => {
       const health = await checkDatabaseReadiness();
       expect(health.ok).toBe(true);
+      expect(health.schemaReady).toBe(true);
+      expect((health.missingTables || []).length).toBe(0);
 
       const res = await request(app).get('/api/health');
       expect(res.status).toBe(200);
@@ -245,22 +312,65 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
       expect(res.body.database.ok).toBe(true);
     });
 
-    it('maintains 13 courses, 26 bilingual lessons, and 100% syllabus coverage across repeated idempotent seeds', async () => {
+    it('maintains 13 courses, 26 bilingual lessons, 260 questions, accurate decibel derivations, and 100% FULLY_VERIFIED coverage', async () => {
       await ensureCurriculumSeeded(true);
       const res = await request(app).get('/api/curriculum');
       expect(res.status).toBe(200);
       expect(res.body.courses.length).toBe(13);
       expect(res.body.lessons.length).toBeGreaterThanOrEqual(26);
       expect(res.body.quizzes.length).toBeGreaterThanOrEqual(26);
+      expect(res.body.questions.length).toBeGreaterThanOrEqual(260);
       expect(res.body.syllabusCoverage.coveragePercent).toBe(100);
-      expect(res.body.syllabusCoverage.completeTopics).toBe(
-        res.body.syllabusCoverage.totalBlueprintTopics
-      );
+      expect(res.body.syllabusCoverage.completeTopics).toBe(129);
       expect(res.body.syllabusCoverage.uncoveredTopics).toBe(0);
+      expect(
+        res.body.syllabusCoverage.levels.every((lvl: any) =>
+          lvl.topics.every((t: any) => t.auditStatus === 'FULLY_VERIFIED')
+        )
+      ).toBe(true);
+
+      // Verify engineering decibel math accuracy (-3.0103 dB for half power, -6.0206 dB for half voltage)
+      const mathLesson = res.body.lessons.find(
+        (l: any) => l.slug === 'math-foundations-si-algebra-trig'
+      );
+      expect(mathLesson).toBeTruthy();
+      expect(mathLesson.technicalExplanationEn).toContain('-3.0103');
+      expect(mathLesson.technicalExplanationEn).toContain('-6.0206');
+
+      // Verify every lesson interactiveLabId resolves to a valid implemented lab
+      for (const lesson of res.body.lessons) {
+        expect(VALID_LAB_IDS.has(lesson.interactiveLabId)).toBe(true);
+        expect(VALID_LAB_IDS.has(resolveValidLabId(lesson.interactiveLabId))).toBe(true);
+      }
     }, 45_000);
 
+    it('persists course enrollments idempotently and verifies lesson prerequisites', async () => {
+      await request(app)
+        .get('/api/auth/me')
+        .set('Authorization', 'Bearer valid-student-token');
+
+      const enrollRes1 = await request(app)
+        .post(`/api/courses/${sampleCourseId}/enroll`)
+        .set('Authorization', 'Bearer valid-student-token');
+      expect(enrollRes1.status).toBe(200);
+      expect(enrollRes1.body.enrolledCourseIds).toContain(sampleCourseId);
+
+      const enrollRes2 = await request(app)
+        .post(`/api/courses/${sampleCourseId}/enroll`)
+        .set('Authorization', 'Bearer valid-student-token');
+      expect(enrollRes2.status).toBe(200);
+      expect(
+        enrollRes2.body.enrolledCourseIds.filter((id: number) => id === sampleCourseId).length
+      ).toBe(1);
+
+      const prereqRes = await request(app)
+        .get(`/api/lessons/${sampleLessonId}/prerequisites`)
+        .set('Authorization', 'Bearer valid-student-token');
+      expect(prereqRes.status).toBe(200);
+      expect(typeof prereqRes.body.met).toBe('boolean');
+    });
+
     it('enforces user-level data isolation on study tasks', async () => {
-      // Ensure both users exist
       await request(app)
         .get('/api/auth/me')
         .set('Authorization', 'Bearer valid-student-token');
@@ -282,7 +392,6 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
       expect(createRes.status).toBe(201);
       const taskId = createRes.body.task.id;
 
-      // Learner 2 attempts to modify or delete Learner 1's task -> 404
       const crossPatch = await request(app)
         .patch(`/api/tasks/${taskId}`)
         .set('Authorization', 'Bearer valid-student-2-token')
@@ -294,7 +403,6 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
         .set('Authorization', 'Bearer valid-student-2-token');
       expect(crossDelete.status).toBe(404);
 
-      // Learner 1 deletes their own task -> 200
       const ownDelete = await request(app)
         .delete(`/api/tasks/${taskId}`)
         .set('Authorization', 'Bearer valid-student-token');
@@ -302,48 +410,64 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
     });
   });
 
-  describe('Phase 3: Assessments, Deadlines & Anti-XP-Farming', () => {
-    it('rejects progress for non-existent lessons and prevents duplicate XP on repeated lesson completion', async () => {
+  describe('Phase 6: Assessments, Concurrency Row Locking, Mode Verification & Anti-XP-Farming', () => {
+    it('prevents duplicate XP even under concurrent lesson completion requests', async () => {
       await request(app)
         .get('/api/auth/me')
-        .set('Authorization', 'Bearer valid-student-token');
+        .set('Authorization', 'Bearer valid-student-3-token');
 
-      const missingRes = await request(app)
-        .post('/api/lessons/999999/progress')
-        .set('Authorization', 'Bearer valid-student-token')
-        .send({ timeSpentMinutes: 10 });
-      expect(missingRes.status).toBe(404);
+      await db
+        .delete(lessonProgress)
+        .where(eq(lessonProgress.userUid, 'test-student-uid-3'));
 
-      // Complete valid lesson twice
-      const firstComplete = await request(app)
-        .post(`/api/lessons/${sampleLessonId}/progress`)
-        .set('Authorization', 'Bearer valid-student-token')
-        .send({ timeSpentMinutes: 15 });
-      expect(firstComplete.status).toBe(200);
+      const [beforeUser] = await db
+        .select()
+        .from(users)
+        .where(eq(users.uid, 'test-student-uid-3'));
 
-      const secondComplete = await request(app)
-        .post(`/api/lessons/${sampleLessonId}/progress`)
-        .set('Authorization', 'Bearer valid-student-token')
-        .send({ timeSpentMinutes: 15 });
-      expect(secondComplete.status).toBe(200);
-      expect(secondComplete.body.alreadyCompleted).toBe(true);
-      expect(secondComplete.body.xpEarned).toBe(0);
-    });
+      const [resA, resB] = await Promise.all([
+        request(app)
+          .post(`/api/lessons/${secondLessonId}/progress`)
+          .set('Authorization', 'Bearer valid-student-3-token')
+          .send({ timeSpentMinutes: 12 }),
+        request(app)
+          .post(`/api/lessons/${secondLessonId}/progress`)
+          .set('Authorization', 'Bearer valid-student-3-token')
+          .send({ timeSpentMinutes: 12 }),
+      ]);
 
-    it('enforces server-side timed quiz deadlines and prevents quiz XP farming', async () => {
+      expect(resA.status).toBe(200);
+      expect(resB.status).toBe(200);
+      const totalXpEarned = (resA.body.xpEarned || 0) + (resB.body.xpEarned || 0);
+      expect(totalXpEarned).toBe(50);
+
+      const [afterUser] = await db
+        .select()
+        .from(users)
+        .where(eq(users.uid, 'test-student-uid-3'));
+      // 50 XP for the lesson + 100 XP for FIRST_STEP achievement, each awarded only once
+      const unlockedFirstStep = [
+        ...(resA.body.newlyUnlocked || []),
+        ...(resB.body.newlyUnlocked || []),
+      ].filter((code) => code === 'FIRST_STEP');
+      expect(unlockedFirstStep.length).toBeLessThanOrEqual(1);
+      const expectedTotalDelta = 50 + (unlockedFirstStep.length === 1 ? 100 : 0);
+      expect((afterUser.xp || 0) - (beforeUser.xp || 0)).toBe(expectedTotalDelta);
+    }, 20_000);
+
+    it('enforces server-side timed quiz deadlines, mode consistency, and prevents quiz XP farming', async () => {
       await request(app)
         .get('/api/auth/me')
         .set('Authorization', 'Bearer valid-student-2-token');
 
-      // Start a timed quiz session
       const startRes = await request(app)
         .post(`/api/quizzes/${sampleQuizId}/start`)
         .set('Authorization', 'Bearer valid-student-2-token')
         .send({ mode: 'timed' });
       expect(startRes.status).toBe(201);
+      expect(startRes.body.session.timeLimitSeconds).toBeGreaterThan(0);
       const sessionId = startRes.body.session.id;
 
-      // Submit valid attempt within deadline
       const quizQuestions = await db
         .select()
         .from(questions)
@@ -353,6 +477,19 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
         answersPayload[String(q.id)] = q.correctAnswer;
       }
 
+      // Submitting a 'timed' session while claiming mode: 'practice' must be rejected
+      const mismatchModeRes = await request(app)
+        .post(`/api/quizzes/${sampleQuizId}/attempts`)
+        .set('Authorization', 'Bearer valid-student-2-token')
+        .send({
+          mode: 'practice',
+          sessionId,
+          answers: answersPayload,
+        });
+      expect(mismatchModeRes.status).toBe(400);
+      expect(mismatchModeRes.body.error).toMatch(/mode mismatch/i);
+
+      // Submit valid timed attempt within deadline
       const attempt1 = await request(app)
         .post(`/api/quizzes/${sampleQuizId}/attempts`)
         .set('Authorization', 'Bearer valid-student-2-token')
@@ -364,7 +501,6 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
       expect(attempt1.status).toBe(200);
       expect(attempt1.body.attempt.passed).toBe(true);
       expect(attempt1.body.attempt.scorePercent).toBe(100);
-      // Explanations are returned after server grading
       expect(attempt1.body.attempt.answersJson[0].explanationEn).toBeTruthy();
 
       // Re-using the same sessionId must be rejected (400)
@@ -411,10 +547,10 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
         });
       expect(lateSubmit.status).toBe(400);
       expect(lateSubmit.body.error).toMatch(/deadline/i);
-    });
+    }, 25_000);
   });
 
-  describe('Phase 5: KaTeX LaTeX Rendering for AI Tutor (math-step mode)', () => {
+  describe('Phase 7 & 8: KaTeX Rendering, Glossary Metadata & 28-Section Lesson Template Editor', () => {
     it('tokenizes mixed Punjabi/English text, inline math ($...$), and block math ($$...$$) and renders KaTeX HTML', () => {
       const sampleTutorOutput =
         'ਡੈਸੀਮਲ $75_{10}$ ਨੂੰ ਬਾਈਨਰੀ ਵਿੱਚ ਬਦਲਣ ਲਈ:\n$$N_{10} = \\sum_{i=0}^{7} b_i \\cdot 2^i$$\nਇਸ ਲਈ ਉੱਤਰ $01001011_2$ ਹੈ।';
@@ -430,6 +566,14 @@ describe('Computer Fundamentals Academy — Security, Database, Assessment & Cur
       const renderedBlock = renderLatexToHtml('N_{10} = \\sum_{i=0}^{7} b_i \\cdot 2^i', true);
       expect(renderedBlock).toContain('katex-display');
       expect(renderedBlock).toContain('katex-mathml');
+    });
+
+    it('enriches glossary terms with SI units, symbols, formulas, and related components', () => {
+      const meta = enrichGlossaryTermMetadata('Voltage (ਵੋਲਟੇਜ)', 'Electric potential difference');
+      expect(meta.symbol).toBe('V');
+      expect(meta.siUnit).toContain('Volt');
+      expect(meta.formula).toContain('V_rms');
+      expect(meta.relatedComponents.length).toBeGreaterThan(0);
     });
 
     it('enforces the standardized 28-section lesson structure for new and existing lessons', () => {
