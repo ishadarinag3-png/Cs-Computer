@@ -57,8 +57,7 @@ type ActiveSection =
   | 'glossary'
   | 'bookmarks'
   | 'achievements'
-  | 'admin'
-  | 'iphone-settings';
+  | 'admin';
 
 const GUEST_PROFILE = {
   uid: 'guest',
@@ -126,22 +125,10 @@ export default function App() {
   }>(GUEST_PROFILE);
 
   const [darkMode, setDarkMode] = useState<boolean>(true);
-  const [oledBlackMode, setOledBlackMode] = useState<boolean>(true);
-  const [dynamicIslandSafePadding, setDynamicIslandSafePadding] = useState<boolean>(true);
-  const [screenTouchLocked, setScreenTouchLocked] = useState<boolean>(true);
+  const [oledBlackMode] = useState<boolean>(true);
+  const [dynamicIslandSafePadding] = useState<boolean>(true);
+  const [screenTouchLocked] = useState<boolean>(true);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-  const [isStandalonePWA, setIsStandalonePWA] = useState<boolean>(false);
-  const [isInIframe, setIsInIframe] = useState<boolean>(false);
-  const [showDirectNotice, setShowDirectNotice] = useState<boolean>(true);
-  const [showIphoneModal, setShowIphoneModal] = useState<boolean>(false);
-  const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
-  const [isIOSDevice, setIsIOSDevice] = useState<boolean>(false);
-  const [directAppUrl, setDirectAppUrl] = useState<string>(() => {
-    if (typeof window !== 'undefined' && window.location.origin && window.location.origin !== 'null') {
-      return window.location.origin;
-    }
-    return DEFAULT_APP_URL;
-  });
 
   const [langMode, setLangMode] = useState<'bilingual' | 'punjabi' | 'english'>('bilingual');
   const [activeSection, setActiveSection] = useState<ActiveSection>('dashboard');
@@ -265,71 +252,19 @@ export default function App() {
     return response;
   };
 
-  // Detect standalone PWA & iOS environment (without blocking pinch-to-zoom accessibility)
-  useEffect(() => {
-    const checkStandalone =
-      (typeof window !== 'undefined' &&
-        window.matchMedia('(display-mode: standalone)').matches) ||
-      (typeof window !== 'undefined' && (window.navigator as any).standalone === true);
-    setIsStandalonePWA(Boolean(checkStandalone));
-
-    const checkIframe = typeof window !== 'undefined' && window.self !== window.top;
-    setIsInIframe(checkIframe);
-
-    const isIOS =
-      typeof window !== 'undefined' &&
-      /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
-    setIsIOSDevice(isIOS);
-
-    fetch('/api/app-info')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.appUrl) {
-          setDirectAppUrl(data.appUrl);
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  const handleOpenDirectApp = () => {
-    if (typeof window !== 'undefined') {
-      window.open(directAppUrl, '_blank');
-    }
-  };
-
-  const handleCopyDirectUrl = async () => {
-    try {
-      await navigator.clipboard.writeText(directAppUrl);
-      setCopiedUrl(true);
-      setTimeout(() => setCopiedUrl(false), 2500);
-    } catch {
-      const input = document.createElement('input');
-      input.value = directAppUrl;
-      document.body.appendChild(input);
-      input.select();
-      document.execCommand('copy');
-      document.body.removeChild(input);
-      setCopiedUrl(true);
-      setTimeout(() => setCopiedUrl(false), 2500);
-    }
-  };
-
   const toggleFullScreenMode = async () => {
     try {
       if (!document.fullscreenElement) {
         if (document.documentElement.requestFullscreen) {
           await document.documentElement.requestFullscreen();
           setIsFullscreen(true);
-        } else {
-          // On iOS Safari where Fullscreen API requires Add to Home Screen, open iPhone 15 Pro settings guide
-          setShowIphoneModal(true);
         }
       } else {
         await document.exitFullscreen();
         setIsFullscreen(false);
       }
     } catch {
-      setShowIphoneModal(true);
+      // Ignore fullscreen API errors when blocked by browser permissions
     }
   };
 
@@ -926,73 +861,7 @@ export default function App() {
         screenTouchLocked ? 'touch-pan-y' : ''
       }`}
     >
-      {/* DIRECT LAUNCH NOTICE BANNER FOR IPHONE STANDALONE MODE */}
-      {showDirectNotice && !isStandalonePWA && (
-        <aside
-          aria-label="Direct iPhone Launcher"
-          className={`shrink-0 px-3 sm:px-6 py-2 border-b text-xs flex flex-wrap items-center justify-between gap-2 z-50 ${
-            darkMode
-              ? 'bg-amber-950/90 border-amber-800/80 text-amber-200'
-              : 'bg-amber-50 border-amber-300 text-amber-950'
-          }`}
-        >
-          <div className="flex items-center gap-2 min-w-0">
-            <Smartphone className="w-4 h-4 text-amber-500 shrink-0" />
-            <span className="font-bold shrink-0">iPhone Full-Screen Mode:</span>
-            <span className="hidden md:inline opacity-90 truncate">
-              To open app without browser borders or AI Studio UI, launch via Direct Safari link before tapping "Add to Home Screen".
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0 ml-auto">
-            <a
-              href={directAppUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-2.5 py-1 min-h-[30px] rounded bg-sky-600 hover:bg-sky-500 text-white font-bold text-[11px] flex items-center gap-1 shadow-sm shrink-0"
-            >
-              <span>Open Direct App in Safari ↗</span>
-            </a>
-            <button
-              onClick={handleCopyDirectUrl}
-              className={`px-2.5 py-1 min-h-[30px] rounded border font-semibold text-[11px] flex items-center gap-1 shrink-0 ${
-                copiedUrl
-                  ? 'bg-emerald-600 text-white border-emerald-500'
-                  : darkMode
-                  ? 'bg-slate-900 border-slate-700 text-slate-200'
-                  : 'bg-white border-amber-400 text-amber-900'
-              }`}
-            >
-              {copiedUrl ? (
-                <>
-                  <Check className="w-3 h-3 text-white" />
-                  <span>Copied ✓</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="w-3 h-3" />
-                  <span>Copy URL</span>
-                </>
-              )}
-            </button>
-            <button
-              onClick={() => setShowIphoneModal(true)}
-              className="px-2 py-1 min-h-[30px] rounded underline font-medium text-[11px] opacity-80 hover:opacity-100 shrink-0"
-            >
-              How-To Guide
-            </button>
-            <button
-              onClick={() => setShowDirectNotice(false)}
-              className="p-1 rounded opacity-60 hover:opacity-100 text-xs font-bold shrink-0 ml-1"
-              aria-label="Dismiss banner"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </aside>
-      )}
-
-      {/* STRICT 3-ZONE TOP BAR CONTRACT (Locked at top, respects iPhone 15 Pro Dynamic Island safe area) */}
+      {/* STRICT 3-ZONE TOP BAR CONTRACT */}
       <header
         className={`shrink-0 flex items-center justify-between gap-4 sm:gap-8 px-4 sm:px-6 py-2.5 sm:py-3.5 border-b ${
           dynamicIslandSafePadding ? 'pt-safe' : ''
@@ -1079,7 +948,6 @@ export default function App() {
               { id: 'bookmarks', label: 'Notes' },
               { id: 'achievements', label: 'Badges' },
               { id: 'admin', label: 'Syllabus' },
-              { id: 'iphone-settings', label: '📱 iPhone 15 Pro' },
             ] as const
           ).map((item) => (
             <button
@@ -1099,22 +967,6 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            onClick={() => setShowIphoneModal(true)}
-            className={`px-2 py-1 min-h-[34px] rounded-lg border text-xs font-semibold flex items-center gap-1 shrink-0 ${
-              isStandalonePWA
-                ? 'border-emerald-500/50 text-emerald-400 bg-emerald-500/10'
-                : 'border-sky-500/40 text-sky-400 bg-sky-500/10 hover:bg-sky-500/20'
-            }`}
-            title="iPhone 15 Pro Standalone Mode"
-          >
-            <Smartphone className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">
-              {isStandalonePWA ? 'Standalone Active ✓' : 'Full-Screen Setup'}
-            </span>
-            <span className="sm:hidden">{isStandalonePWA ? 'PWA ✓' : 'Full Screen'}</span>
-          </button>
-
           <div className={`flex items-center gap-0.5 p-0.5 rounded-lg border ${subtlePanel}`}>
             {(
               [
@@ -1218,7 +1070,7 @@ export default function App() {
                 >
                   <div className="space-y-3">
                     <div className="text-xs font-mono text-sky-500">
-                      Bilingual CS & Math Academy · iPhone 15 Pro Full-Screen Ready
+                      Bilingual CS & Electronics Engineering Academy · Levels 0–12
                     </div>
                     <h1 className="text-xl sm:text-3xl font-bold tracking-tight leading-snug">
                       Master Binary, Assembly, Hardware, Algorithms & CS Math — Explained Simply.
@@ -1241,13 +1093,6 @@ export default function App() {
                       className={`w-full sm:w-auto px-4 py-3 min-h-[44px] rounded-xl border text-xs sm:text-sm font-semibold ${subtlePanel}`}
                     >
                       Interactive Computer Lab
-                    </button>
-                    <button
-                      onClick={() => setActiveSection('iphone-settings')}
-                      className={`w-full sm:w-auto px-4 py-3 min-h-[44px] rounded-xl border text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 ${subtlePanel}`}
-                    >
-                      <Smartphone className="w-4 h-4 text-sky-400" />
-                      <span>iPhone 15 Pro Display</span>
                     </button>
                   </div>
                 </div>
@@ -2496,425 +2341,10 @@ export default function App() {
             </div>
           )}
 
-          {/* 11. IPHONE 15 PRO DISPLAY & FULL-SCREEN SETTINGS */}
-          {activeSection === 'iphone-settings' && (
-            <div className={`p-5 sm:p-6 rounded-2xl border space-y-6 ${surfaceCard}`}>
-              <div className="flex items-start justify-between gap-4 border-b border-slate-500/20 pb-4">
-                <div>
-                  <div className="text-xs font-mono text-sky-400">
-                    DEVICE PROFILE: iPHONE 15 PRO (393 × 852 pt · Super Retina XDR 120Hz)
-                  </div>
-                  <h2 className="text-xl font-bold mt-1">
-                    iPhone 15 Pro Full-Screen & Standalone App Setup
-                  </h2>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Open CS Academy directly without Safari navigation bars or AI Studio playgrounds wrapper.
-                  </p>
-                </div>
-                <Smartphone className="w-8 h-8 text-sky-500 shrink-0" />
-              </div>
-
-              {/* LIVE ENVIRONMENT STATUS INDICATOR */}
-              <div
-                className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
-                  isStandalonePWA
-                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
-                    : isInIframe
-                    ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
-                    : 'border-sky-500/40 bg-sky-500/10 text-sky-200'
-                }`}
-              >
-                <div className="flex items-start gap-2.5">
-                  {isStandalonePWA ? (
-                    <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
-                  ) : (
-                    <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                  )}
-                  <div>
-                    <div className="text-xs font-bold uppercase tracking-wider">
-                      {isStandalonePWA
-                        ? 'Standalone Full-Screen Mode Active (No Browser Borders)'
-                        : isInIframe
-                        ? 'Notice: Viewing inside AI Studio Preview Frame'
-                        : 'Viewing in Standard Safari Browser'}
-                    </div>
-                    <div className="text-xs mt-0.5 opacity-90">
-                      {isStandalonePWA
-                        ? 'App is running edge-to-edge around the Dynamic Island with zero Safari borders!'
-                        : isInIframe
-                        ? 'Do not tap Add to Home Screen inside this preview. Click "Open Direct App in Safari" below first!'
-                        : 'Tap the Safari Share button below and select "Add to Home Screen" to install.'}
-                    </div>
-                  </div>
-                </div>
-
-                {!isStandalonePWA && (
-                  <a
-                    href={directAppUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full sm:w-auto px-4 py-2 min-h-[40px] rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold shrink-0 flex items-center justify-center gap-1.5"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    <span>Open Direct App in Safari ↗</span>
-                  </a>
-                )}
-              </div>
-
-              {/* CRITICAL EXPLANATION: WHY AI STUDIO PLAYGROUND OPENED */}
-              <div className="p-5 rounded-xl border border-amber-500/40 bg-amber-500/10 space-y-3">
-                <div className="flex items-center gap-2 text-amber-400 font-bold text-sm">
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span>
-                    ਸਮੱਸਿਆ ਦਾ ਹੱਲ: ਕਿਉਂ AI Studio Playground ਖੁੱਲ੍ਹਿਆ ਸੀ? (Why AI Studio Opened Instead of App)
-                  </span>
-                </div>
-                <div className="text-xs text-slate-200 space-y-2 leading-relaxed">
-                  <p>
-                    <strong>English:</strong> When viewing an app inside Google AI Studio Build, the URL in Safari is <code className="text-amber-300 font-mono">aistudio.google.com</code>. If you tap <em>"Add to Home Screen"</em> on that page, iOS saves the AI Studio editor website.
-                  </p>
-                  <p>
-                    <strong>ਪੰਜਾਬੀ:</strong> ਜਦੋਂ ਤੁਸੀਂ AI Studio Build ਵਿੱਚੋਂ 'Add to Home Screen' ਕਰਦੇ ਹੋ, ਤਾਂ iPhone ਸਾਰੀ AI Studio ਵੈੱਬਸਾਈਟ ਨੂੰ ਸੇਵ ਕਰਦਾ ਹੈ। ਅਸਲ CS Academy ਐਪ ਨੂੰ <strong>100% Full Screen ਬਿਨਾਂ ਕਿਸੇ ਬ੍ਰਾਊਜ਼ਰ ਬਾਰ ਦੇ</strong> ਚਲਾਉਣ ਲਈ ਹੇਠਾਂ ਦਿੱਤੇ ਬਟਨ ਰਾਹੀਂ ਐਪ ਦਾ <strong>Direct Link</strong> ਸਫਾਰੀ ਵਿੱਚ ਖੋਲ੍ਹੋ।
-                  </p>
-                </div>
-
-                <div className="pt-2 flex flex-wrap items-center gap-2.5">
-                  <a
-                    href={directAppUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-4 py-2.5 min-h-[44px] rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold flex items-center gap-2 shadow-md"
-                  >
-                    <ExternalLink className="w-4 h-4" />
-                    <span>Open Direct App in Safari ↗</span>
-                  </a>
-                  <button
-                    onClick={handleCopyDirectUrl}
-                    className={`px-4 py-2.5 min-h-[44px] rounded-xl border text-xs font-bold flex items-center gap-2 ${
-                      copiedUrl
-                        ? 'bg-emerald-600 border-emerald-500 text-white'
-                        : 'border-slate-600 bg-slate-800 text-slate-200'
-                    }`}
-                  >
-                    {copiedUrl ? (
-                      <>
-                        <Check className="w-4 h-4 text-white" />
-                        <span>Copied Direct URL ✓</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-4 h-4" />
-                        <span>Copy Direct URL</span>
-                      </>
-                    )}
-                  </button>
-                  <span className="text-[11px] text-sky-400 font-mono select-all truncate max-w-xs bg-slate-900/80 px-2.5 py-1 rounded border border-slate-700">
-                    {directAppUrl}
-                  </span>
-                </div>
-              </div>
-
-              {/* STEP-BY-STEP INSTALLATION GUIDE */}
-              <div className="p-5 rounded-xl border border-sky-500/30 bg-sky-500/10 space-y-3">
-                <div className="text-sm font-bold flex items-center gap-2 text-sky-400">
-                  <Share className="w-4 h-4" />
-                  <span>
-                    How to Run 100% Edge-to-Edge Full Screen (No Safari Bar, No AI Studio UI):
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
-                  <div className={`p-3.5 rounded-xl border space-y-1.5 ${subtlePanel}`}>
-                    <div className="w-6 h-6 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-xs">
-                      1
-                    </div>
-                    <div className="font-bold">Open Direct Link</div>
-                    <p className="text-slate-400 text-[11px]">
-                      Open the Direct App URL in <strong>Safari</strong> on your iPhone 15 Pro.
-                    </p>
-                  </div>
-
-                  <div className={`p-3.5 rounded-xl border space-y-1.5 ${subtlePanel}`}>
-                    <div className="w-6 h-6 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-xs">
-                      2
-                    </div>
-                    <div className="font-bold flex items-center gap-1">
-                      <span>Tap Share (📤)</span>
-                    </div>
-                    <p className="text-slate-400 text-[11px]">
-                      At the bottom of Safari, tap the <strong>Share</strong> button (box with arrow up).
-                    </p>
-                  </div>
-
-                  <div className={`p-3.5 rounded-xl border space-y-1.5 ${subtlePanel}`}>
-                    <div className="w-6 h-6 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-xs">
-                      3
-                    </div>
-                    <div className="font-bold">Add to Home Screen</div>
-                    <p className="text-slate-400 text-[11px]">
-                      Tap <strong>"Add to Home Screen" (ਹੋਮ ਸਕ੍ਰੀਨ ਤੇ ਜੋੜੋ)</strong> and tap <strong>Add</strong>.
-                    </p>
-                  </div>
-
-                  <div className="p-3.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 space-y-1.5">
-                    <div className="w-6 h-6 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center text-xs">
-                      ✓
-                    </div>
-                    <div className="font-bold text-white">Full Screen Ready</div>
-                    <p className="text-[11px] text-emerald-200/90">
-                      Tap the icon on your iPhone home screen! It opens 100% full screen with zero borders!
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* HARDWARE STABILITY & TOUCH CONTROLS */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* 1. Touch & Horizontal Movement Lock */}
-                <div className={`p-4 rounded-xl border flex items-center justify-between gap-3 ${subtlePanel}`}>
-                  <div>
-                    <div className="text-sm font-bold flex items-center gap-1.5">
-                      <Lock className="w-4 h-4 text-emerald-400" />
-                      <span>Lock Screen Against Finger Movement</span>
-                    </div>
-                    <p className="text-xs text-slate-400 mt-1">
-                      Locks viewport (`100dvh`, `touch-action: pan-y`, `overscroll-behavior: none`) so dragging with your finger never shifts the screen sideways.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setScreenTouchLocked(!screenTouchLocked)}
-                    className={`px-4 py-2 min-h-[42px] rounded-lg text-xs font-bold shrink-0 ${
-                      screenTouchLocked ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300'
-                    }`}
-                  >
-                    {screenTouchLocked ? 'LOCKED ✓' : 'UNLOCKED'}
-                  </button>
-                </div>
-
-                {/* 2. Dynamic Island & Home Bar Safe Area */}
-                <div className={`p-4 rounded-xl border flex items-center justify-between gap-3 ${subtlePanel}`}>
-                  <div>
-                    <div className="text-sm font-bold">
-                      iPhone 15 Pro Dynamic Island Safe Insets
-                    </div>
-                    <p className="text-xs text-slate-400 mt-1">
-                      Applies `env(safe-area-inset-top)` and `env(safe-area-inset-bottom)` so controls never collide with the Dynamic Island or Home Indicator bar.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setDynamicIslandSafePadding(!dynamicIslandSafePadding)}
-                    className={`px-4 py-2 min-h-[42px] rounded-lg text-xs font-bold shrink-0 ${
-                      dynamicIslandSafePadding ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-300'
-                    }`}
-                  >
-                    {dynamicIslandSafePadding ? 'ACTIVE ✓' : 'OFF'}
-                  </button>
-                </div>
-
-                {/* 3. Super Retina XDR Pure OLED Black Mode */}
-                <div className={`p-4 rounded-xl border flex items-center justify-between gap-3 ${subtlePanel}`}>
-                  <div>
-                    <div className="text-sm font-bold">
-                      Super Retina XDR True OLED Black (#000000)
-                    </div>
-                    <p className="text-xs text-slate-400 mt-1">
-                      Blends seamlessly into the iPhone 15 Pro Dynamic Island bezel and saves battery on OLED pixels.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setDarkMode(true);
-                      setOledBlackMode(!oledBlackMode);
-                    }}
-                    className={`px-4 py-2 min-h-[42px] rounded-lg text-xs font-bold shrink-0 ${
-                      oledBlackMode && darkMode ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-300'
-                    }`}
-                  >
-                    {oledBlackMode && darkMode ? 'OLED ON ✓' : 'SLATE'}
-                  </button>
-                </div>
-
-                {/* 4. Native Fullscreen Toggle */}
-                <div className={`p-4 rounded-xl border flex items-center justify-between gap-3 ${subtlePanel}`}>
-                  <div>
-                    <div className="text-sm font-bold">Full-Screen Viewport Mode</div>
-                    <p className="text-xs text-slate-400 mt-1">
-                      {isStandalonePWA
-                        ? 'Running in native iOS Standalone Full-Screen mode!'
-                        : 'Expand viewport or add to iPhone Home Screen for 100% edge-to-edge full screen.'}
-                    </p>
-                  </div>
-                  <button
-                    onClick={toggleFullScreenMode}
-                    className="px-4 py-2 min-h-[42px] rounded-lg bg-amber-500 text-slate-950 text-xs font-bold shrink-0"
-                  >
-                    {isFullscreen ? 'Exit Full Screen' : 'Enter Full Screen'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </main>
 
-      {/* IPHONE FULL-SCREEN SETUP MODAL */}
-      {showIphoneModal && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
-        >
-          <div
-            className={`w-full max-w-lg rounded-2xl border p-5 sm:p-6 space-y-4 shadow-2xl max-h-[90dvh] overflow-y-auto ${surfaceCard}`}
-          >
-            <div className="flex items-start justify-between gap-3 border-b border-slate-500/20 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-xl bg-sky-500/10 border border-sky-500/30 text-sky-400">
-                  <Smartphone className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base sm:text-lg font-bold">
-                    iPhone 15 Pro Standalone Full-Screen Setup
-                  </h3>
-                  <p className="text-xs text-slate-400">
-                    Run 100% borderless with zero Safari bars & zero AI Studio wrappers
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowIphoneModal(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Why AI Studio opened explanation */}
-            <div className="p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/10 space-y-1.5 text-xs">
-              <div className="font-bold flex items-center gap-1.5 text-amber-400">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>ਕਿਉਂ AI Studio Playground ਖੁੱਲ੍ਹਿਆ ਸੀ? (Why AI Studio Opened)</span>
-              </div>
-              <p className="text-slate-300 leading-relaxed">
-                When you tap "Add to Home Screen" inside AI Studio Build, Safari bookmarks the Google AI Studio playground website instead of the standalone CS Academy application.
-              </p>
-              <p className="text-amber-200/90 font-medium leading-relaxed">
-                ਬਿਨਾਂ ਬ੍ਰਾਊਜ਼ਰ ਬਾਰ ਅਤੇ ਬਿਨਾਂ AI Studio ਦੇ Full Screen ਚਲਾਉਣ ਲਈ, ਤੁਹਾਨੂੰ ਹੇਠਾਂ ਦਿੱਤਾ <strong>Direct App URL</strong> ਸਫਾਰੀ ਵਿੱਚ ਖੋਲ੍ਹਣਾ ਪਵੇਗਾ।
-              </p>
-            </div>
-
-            {/* 1-Tap Action Buttons */}
-            <div className="space-y-2">
-              <div className="text-xs font-semibold text-slate-400">Direct Standalone App Link:</div>
-              <div className="flex items-center gap-2">
-                <a
-                  href={directAppUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex-1 py-3 px-4 min-h-[46px] rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg"
-                >
-                  <ExternalLink className="w-4 h-4" />
-                  <span>1. Open Direct App in Safari ↗</span>
-                </a>
-                <button
-                  onClick={handleCopyDirectUrl}
-                  className={`py-3 px-4 min-h-[46px] rounded-xl border font-bold text-xs flex items-center justify-center gap-1.5 shrink-0 ${
-                    copiedUrl
-                      ? 'bg-emerald-600 border-emerald-500 text-white'
-                      : 'border-slate-600 bg-slate-800 hover:bg-slate-700 text-slate-200'
-                  }`}
-                >
-                  {copiedUrl ? (
-                    <>
-                      <Check className="w-4 h-4 text-white" />
-                      <span>Copied!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-4 h-4" />
-                      <span>Copy URL</span>
-                    </>
-                  )}
-                </button>
-              </div>
-
-              <div className="p-2.5 rounded-xl border border-slate-700 bg-slate-900/90 flex items-center justify-between gap-2 text-xs font-mono text-sky-400">
-                <span className="truncate select-all">{directAppUrl}</span>
-                <span className="text-[10px] text-emerald-400 font-sans font-semibold shrink-0">
-                  Verified Live URL
-                </span>
-              </div>
-            </div>
-
-            {/* Visual Step-by-Step Instructions */}
-            <div className="space-y-2.5 pt-2">
-              <div className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                Simple 3-Step Setup (ਹੋਮ ਸਕ੍ਰੀਨ 'ਤੇ ਜੋੜਨ ਦੇ ਆਸਾਨ ਕਦਮ):
-              </div>
-              <div className="space-y-2 text-xs">
-                <div className={`p-3 rounded-xl border flex items-start gap-3 ${subtlePanel}`}>
-                  <div className="w-6 h-6 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-xs shrink-0 mt-0.5">
-                    1
-                  </div>
-                  <div>
-                    <div className="font-bold">Open Direct App in Safari</div>
-                    <p className="text-slate-400 mt-0.5">
-                      Tap the blue button above to open the deployed app URL directly in Safari (or paste it into Safari's address bar).
-                    </p>
-                  </div>
-                </div>
-
-                <div className={`p-3 rounded-xl border flex items-start gap-3 ${subtlePanel}`}>
-                  <div className="w-6 h-6 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-xs shrink-0 mt-0.5">
-                    2
-                  </div>
-                  <div>
-                    <div className="font-bold flex items-center gap-1.5">
-                      <span>Tap Safari Share Button</span>
-                      <Share className="w-3.5 h-3.5 text-sky-400" />
-                    </div>
-                    <p className="text-slate-400 mt-0.5">
-                      At the bottom bar of Safari, tap the Share icon (square with an arrow pointing up 📤).
-                    </p>
-                  </div>
-                </div>
-
-                <div className={`p-3 rounded-xl border flex items-start gap-3 ${subtlePanel}`}>
-                  <div className="w-6 h-6 rounded-full bg-sky-600 text-white font-bold flex items-center justify-center text-xs shrink-0 mt-0.5">
-                    3
-                  </div>
-                  <div>
-                    <div className="font-bold">
-                      Tap "Add to Home Screen" · ਹੋਮ ਸਕ੍ਰੀਨ ਤੇ ਜੋੜੋ
-                    </div>
-                    <p className="text-slate-400 mt-0.5">
-                      Scroll down in the Share sheet, tap <strong>Add to Home Screen</strong>, and tap <strong>Add</strong> at the top right.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="p-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 flex items-start gap-3 text-emerald-300">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
-                  <div>
-                    <div className="font-bold text-white">Done! Pure Full Screen Native Experience</div>
-                    <p className="text-xs text-emerald-200/90 mt-0.5">
-                      Now tap the <strong>CS Academy</strong> icon on your iPhone home screen! It opens 100% full screen with zero browser address bars, zero bottom borders, and NO AI Studio playgrounds!
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <button
-              onClick={() => setShowIphoneModal(false)}
-              className="w-full py-2.5 min-h-[42px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* MOBILE-FIRST IPHONE 15 PRO THUMB NAVIGATION BAR (Anchored at bottom of flex shell, respects Home Indicator) */}
+      {/* MOBILE THUMB NAVIGATION BAR */}
       <nav
         className={`md:hidden shrink-0 border-t px-2 pt-1.5 pb-safe grid grid-cols-5 gap-1 z-40 ${
           darkMode ? 'bg-slate-950/95 border-slate-800' : 'bg-white/95 border-slate-200'
